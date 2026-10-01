@@ -22,12 +22,15 @@ git submodule update --init vendor/kitten-text-processing
 
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_STANDARD_REQUIRED=ON \
   -DGGML_CUDA=OFF -DGGML_METAL=OFF \
   -DLLAMA_BUILD_KITTEN_TTS=ON \
   -DLLAMA_BUILD_SERVER=OFF \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+
 
 cmake --build build --target kitten-tts -j 8
 ```
@@ -88,7 +91,6 @@ The implementation is checked against `kittenml.kittentts2`:
 | Native waveform decoding | Sample-for-sample agreement with Python in tested cases for all three decoders |
 | Packed LM logits | Close numerical agreement with the Python reference |
 
-On a Xeon Platinum 8462Y+ with eight pinned CPU cores, the AMX path reduced a 256-token forced-sequence workload from **6.40 to 5.60 seconds** (about **14% higher throughput**). Prompt evaluation fell from **1.09 to 0.58 seconds**. TQ2_1 reached **45.7 generated tokens/second**, comparable to Q4_0 at **44.3** in the same test. These are medians of three warmed runs, including prompt evaluation and sampling but excluding model loading. Performance varies with hardware and workload.
 
 Run the differential checks with:
 
