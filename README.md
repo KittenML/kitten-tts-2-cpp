@@ -42,8 +42,8 @@ The normalizer prepares its grammar data using Python at build time. To use exis
 The runtime fetches `config.json` from `KittenML/kitten-tts-2` first, then downloads its GGUF, selected TorchScript decoder, and matching voice conditioning. Assets are cached under `$XDG_CACHE_HOME/kitten-tts` (or `~/.cache/kitten-tts`).
 
 ```sh
-build/bin/kitten-tts --text 'Hello from Kitten T T S.' --output hello.wav
-build/bin/kitten-tts --decoder student_w4 --text 'Hello again.' --output w4.wav
+build/bin/kitten-tts --text 'One day, a little girl named Lily found a needle in her room.' --output hello.wav
+build/bin/kitten-tts --decoder student_w4 --text 'One day, a little girl named Lily found a needle in her room.' --output w4.wav
 ```
 
 Use `--repo OWNER/REPO` to select another KittenTTS2 repository, `--revision COMMIT` to pin a model version, `--cache-dir DIR` to change the cache location, and `--offline` to use cached files without network access. `HF_TOKEN` supports private repositories. `--download-only --decoder student_w4` prepares the cache without synthesis. Only assets needed for the selected mode are downloaded.
@@ -77,33 +77,6 @@ build/bin/kitten-tts \
 ```
 
 Use `--help` for sampling, repetition penalties, chunking, and decoder thread settings. `--tokens-only` skips waveform decoding; `--repeat 3` benchmarks repeated synthesis with the model and decoder kept loaded.
-
-## Python parity and CPU performance
-
-The implementation is checked against `kittenml.kittentts2`:
-
-| Check | Recorded result |
-| --- | --- |
-| Text normalization and chunking | 228 cases passed |
-| Sampling rules | 12 cases passed |
-| Audio joins | 3 cases passed |
-| Packed weights | All 310 tensors reconstruct the FP16 reference exactly |
-| Native waveform decoding | Sample-for-sample agreement with Python in tested cases for all three decoders |
-| Packed LM logits | Close numerical agreement with the Python reference |
-
-
-Run the differential checks with:
-
-```sh
-python tools/kitten-tts/check_parity.py \
-  --binary build/bin/kitten-tts \
-  --python-package ../KittenTTS \
-  --repo ../kitten-tts-2 --assets models/kitten2 \
-  --model models/kitten2/model-tq2_1.gguf \
-  --lm --decoder
-```
-
-Measurements and source revisions are recorded in [validation.json](tools/kitten-tts/validation.json).
 
 ## Current scope
 
