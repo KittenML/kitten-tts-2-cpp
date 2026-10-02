@@ -15,7 +15,7 @@ The speech language model runs through llama.cpp/GGML, text normalization uses t
 
 ## Build
 
-Requires a C++17 compiler, CMake, and CPU LibTorch. A CPU PyTorch installation can provide LibTorch's headers and libraries. Use the same LibTorch version for export and inference, with compatible torch/torchaudio versions for asset preparation.
+Requires a C++20 compiler, CMake, and CPU LibTorch. A CPU PyTorch installation can provide LibTorch's headers and libraries. Use the same LibTorch version for export and inference, with compatible torch/torchaudio versions for asset preparation.
 
 ```sh
 git submodule update --init vendor/kitten-text-processing
