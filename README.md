@@ -1,4 +1,4 @@
-# KittenTTS2 C++
+# Kitten-TTS 2 C++
 
 CPU-focused C++ inference for KittenTTS2, with built-in voices, expression controls, and prepared reference voices. The runtime downloads prepared model assets and runs synthesis natively in C++. Users do not need to run the Python exporter.
 
