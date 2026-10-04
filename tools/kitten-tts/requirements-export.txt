@@ -1,0 +1,13 @@
+# Install a matching CPU torch/torchaudio pair separately.
+transformers==4.57.6
+diffusers==0.35.2
+s3tokenizer==0.3.0
+huggingface_hub>=0.34,<1
+omegaconf>=2.3,<3
+einops>=0.8
+safetensors>=0.5
+numpy
+scipy
+librosa
+soundfile
+sentencepiece

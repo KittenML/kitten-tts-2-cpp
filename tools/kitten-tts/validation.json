@@ -1,0 +1,362 @@
+{
+  "date": "2026-09-27",
+  "base_commit": "7e30f3adb34b444c3527f94c3343612d71b47d0d",
+  "normalizer_commit": "1988d61ca82d51ad11cb4a541ac61e1f46677eb4",
+  "python_package_commit": "be5758500b731b8fc674acc62ea480d3022b7ebe",
+  "python_reference_sha256": {
+    "tokens.py": "b56d6bf3446cd95044b9cc9d1429d60d7ab65abed2daa227c5cb3dc7b1f23f43",
+    "logits.py": "46a96a8cb0d322ca28d12fa64084759b75983afa29f3c14f373c080405ee490c",
+    "text.py": "5d45bf1a7aa76fcc1318649ce38fc534fe6b95be5264f9607f8c34f7705bc70e",
+    "vocoder.py": "8f0d910d2ae11392568ea969bc8e4b180c329616732f9662b16f37dc8afe711e",
+    "speaker.py": "d9ae4985c238ecd44b708b2e6c53c7d89eb1b22984a546d89ca86bcce978141f",
+    "prompt.py": "381e3e772ba994f4e3b59714ecebb282dda517145ca49dd76a01e4474c9d223d",
+    "model.py": "c97a887ac0886e1b3088b802e5bdbae01ee6a3485b42db7eb387e89348bfe4f8",
+    "__init__.py": "e1a110b43b00dd3ae52dd2c9ebc4b867a7563e618eed350cba547ff1ce88f952",
+    "s3gen.py": "d7cc72d254a370830f93b05ee492d8fbc011e80ad55f8360b33d016018fc3d9d",
+    "speaker_embedding.py": "d2bef387fef1e59b23ff3da9d8e269cd9675f64b7d2e86b534684b5ea82747ea",
+    "student_flow.py": "a9ca972251d8d5edbe594391b693762f1bfbb184cf1c64aac1fcfbf94fa724ab"
+  },
+  "cpu": "Intel Xeon Platinum 8462Y+",
+  "threads": 8,
+  "frontend_cases": 228,
+  "sampling_cases": 12,
+  "audio_join_cases": 3,
+  "weight_parity": {
+    "tensors": 310,
+    "types": {
+      "F16": 1,
+      "F32": 113,
+      "Q4_0": 196
+    },
+    "max_error": 0.0
+  },
+  "lm_parity": [
+    {
+      "voice": "Bruno",
+      "prompt_tokens": 299,
+      "steps": 16,
+      "max_abs": 0.20647811889648438,
+      "rmse": 0.02817322313785553,
+      "min_cosine": 0.999999463558197,
+      "argmax_agreement": 0.9375,
+      "bf16_rmse": 0.08613339811563492,
+      "bf16_min_cosine": 0.9999973177909851,
+      "bf16_argmax_agreement": 0.75
+    },
+    {
+      "voice": "Kiki",
+      "prompt_tokens": 335,
+      "steps": 16,
+      "max_abs": 0.3631553649902344,
+      "rmse": 0.021895190700888634,
+      "min_cosine": 0.9999989867210388,
+      "argmax_agreement": 1.0,
+      "bf16_rmse": 0.09011777490377426,
+      "bf16_min_cosine": 0.9999972581863403,
+      "bf16_argmax_agreement": 0.875
+    }
+  ],
+  "native_decoder_parity": {
+    "default": [
+      {
+        "voice": "Bruno",
+        "tokens": 7,
+        "samples": 9120,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Kiki",
+        "tokens": 51,
+        "samples": 51840,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Bruno",
+        "tokens": 113,
+        "samples": 110880,
+        "max_error": 0.0
+      }
+    ],
+    "student_w4": [
+      {
+        "voice": "Bruno",
+        "tokens": 7,
+        "samples": 9600,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Kiki",
+        "tokens": 51,
+        "samples": 51840,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Bruno",
+        "tokens": 113,
+        "samples": 111360,
+        "max_error": 0.0
+      }
+    ],
+    "student_w8": [
+      {
+        "voice": "Bruno",
+        "tokens": 7,
+        "samples": 9600,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Kiki",
+        "tokens": 51,
+        "samples": 51840,
+        "max_error": 0.0
+      },
+      {
+        "voice": "Bruno",
+        "tokens": 113,
+        "samples": 111360,
+        "max_error": 0.0
+      }
+    ]
+  },
+  "warm_benchmark": {
+    "seed": 1234,
+    "iteration": 3,
+    "lm_seconds": 2.672194946,
+    "decoder_seconds": 0.701172109,
+    "generated_tokens": 93,
+    "audio_seconds": 3.78,
+    "rtf": 0.8924251468253969
+  },
+  "limitations": [
+    "Different RNGs and BF16/GGML arithmetic mean sampled outputs are not bit-identical to Python.",
+    "Reference voice extraction requires offline Python preparation and a transcript.",
+    "S3 uses CPU LibTorch; the runtime provides a batch CLI rather than the Python streaming API."
+  ],
+  "tq2_1": {
+    "date": "2026-09-29",
+    "ggml_type_id": 43,
+    "gguf_file_type": 42,
+    "block_weights": 256,
+    "block_bytes": 68,
+    "scale_group_weights": 128,
+    "weight_parity": {
+      "tensors": 310,
+      "types": {
+        "F16": 1,
+        "F32": 113,
+        "TQ2_1": 196
+      },
+      "max_error": 0.0
+    },
+    "lm_parity": [
+      {
+        "voice": "Bruno",
+        "prompt_tokens": 299,
+        "steps": 16,
+        "max_abs": 0.3558006286621094,
+        "rmse": 0.04508982226252556,
+        "min_cosine": 0.9999985694885254,
+        "argmax_agreement": 0.875,
+        "bf16_rmse": 0.10061297565698624,
+        "bf16_min_cosine": 0.999996542930603,
+        "bf16_argmax_agreement": 0.8125
+      },
+      {
+        "voice": "Kiki",
+        "prompt_tokens": 335,
+        "steps": 16,
+        "max_abs": 0.56304931640625,
+        "rmse": 0.039180707186460495,
+        "min_cosine": 0.9999976754188538,
+        "argmax_agreement": 1.0,
+        "bf16_rmse": 0.09534855931997299,
+        "bf16_min_cosine": 0.9999963641166687,
+        "bf16_argmax_agreement": 0.875
+      }
+    ],
+    "cpu_kernel_tests": [
+      "native AVX512-VNNI",
+      "AVX2 without VNNI",
+      "scalar fallback with AVX disabled"
+    ],
+    "backend_tests": {
+      "ops": [
+        "MUL_MAT",
+        "GET_ROWS"
+      ],
+      "passed": 15
+    },
+    "python_byte_layout_tests": 2,
+    "model_bytes": 1029076832,
+    "q4_model_bytes": 1447458656,
+    "compatibility": "Fork-specific CPU format; stock llama.cpp does not support this type.",
+    "benchmark": {
+      "scope": "256 forced tokens; same text, voice and seed; 8 CPU threads; third of three repeats; includes prompt evaluation, excludes loading",
+      "results": [
+        {
+          "format": "ternary-q4_0",
+          "bytes": 1447458656,
+          "lm_seconds": 5.590145512,
+          "generated_tokens": 256,
+          "tokens_per_second": 45.794872324962114
+        },
+        {
+          "format": "tq2_1",
+          "bytes": 1029076832,
+          "lm_seconds": 6.594376947,
+          "generated_tokens": 256,
+          "tokens_per_second": 38.820953375506214
+        }
+      ]
+    },
+    "speech_checks": {
+      "decoder": "student_w4",
+      "seed": 1234,
+      "threads": 8,
+      "all_chunks_terminated": true,
+      "all_waveforms_finite": true,
+      "all_prompt_ids_match_python": true,
+      "asr_note": "Whisper medium.en CPU int8; normalized word counts exclude expression markup. The expressive sample has three extra ASR words (ha ha ha) at the requested laugh.",
+      "results": [
+        {
+          "id": "01_narration",
+          "audio_seconds": 7.16,
+          "rtf": 0.7557065691340783,
+          "lm_seconds": 4.852619457,
+          "decoder_seconds": 0.558239578,
+          "transcript": "One day, a little girl named Lily found a needle in her room. She knew it was difficult to play with it because it was sharp.",
+          "asr_word_errors": 0,
+          "asr_reference_words": 26
+        },
+        {
+          "id": "02_numbers",
+          "audio_seconds": 10.96,
+          "rtf": 0.7269495196167883,
+          "lm_seconds": 6.949113799,
+          "decoder_seconds": 1.018252936,
+          "transcript": "Dr. Rivera paid $12.50 for three tickets on May 5, 2026. The train leaves at 3.05 p.m., so please arrive 10 minutes early.",
+          "asr_word_errors": 0,
+          "asr_reference_words": 30
+        },
+        {
+          "id": "03_expression",
+          "audio_seconds": 13.2,
+          "rtf": 0.752124075,
+          "lm_seconds": 8.780154876,
+          "decoder_seconds": 1.147882914,
+          "transcript": "We actually won the grant! Ha ha ha! I can hardly believe it! Thank you for believing in us from the very beginning!",
+          "asr_word_errors": 3,
+          "asr_reference_words": 20
+        }
+      ]
+    },
+    "amx": {
+      "date": "2026-09-29",
+      "runtime_layout": "Exact load-time expansion into existing AMX Q4_0 layout; GGUF remains TQ2_1.",
+      "transformer_weight_buffer_mib": 756,
+      "compact_transformer_payload_mib": 357,
+      "compact_option": "--no-repack disables extra CPU weight buffers",
+      "matrix_cases_exactly_matching_lossless_q4": 8,
+      "lm_parity": [
+        {
+          "voice": "Bruno",
+          "prompt_tokens": 299,
+          "steps": 16,
+          "max_abs": 0.20647811889648438,
+          "rmse": 0.02817322313785553,
+          "min_cosine": 0.999999463558197,
+          "argmax_agreement": 0.9375,
+          "bf16_rmse": 0.08613339811563492,
+          "bf16_min_cosine": 0.9999973177909851,
+          "bf16_argmax_agreement": 0.75
+        },
+        {
+          "voice": "Kiki",
+          "prompt_tokens": 335,
+          "steps": 16,
+          "max_abs": 0.3631553649902344,
+          "rmse": 0.021895190700888634,
+          "min_cosine": 0.9999989867210388,
+          "argmax_agreement": 1.0,
+          "bf16_rmse": 0.09011777490377426,
+          "bf16_min_cosine": 0.9999972581863403,
+          "bf16_argmax_agreement": 0.875
+        }
+      ],
+      "speech_checks": [
+        {
+          "case": "01_narration",
+          "tokens_match_q4": true,
+          "audio_shape_match": true,
+          "audio_exact": true,
+          "audio_max_error": 0.0
+        },
+        {
+          "case": "02_numbers",
+          "tokens_match_q4": true,
+          "audio_shape_match": true,
+          "audio_exact": true,
+          "audio_max_error": 0.0
+        },
+        {
+          "case": "03_expression",
+          "tokens_match_q4": true,
+          "audio_shape_match": true,
+          "audio_exact": true,
+          "audio_max_error": 0.0
+        }
+      ],
+      "benchmark": {
+        "date": "2026-09-29",
+        "cpu": "Intel Xeon Platinum 8462Y+",
+        "threads": 8,
+        "affinity": "0,2,4,6,8,10,12,14",
+        "workload": "same text, Bruno, seed 1234, 256 forced tokens; median of runs 2-4; includes prompt and sampling, excludes loading",
+        "results": [
+          {
+            "variant": "baseline",
+            "format": "tq2_1",
+            "lm_seconds_all": [
+              6.487344393,
+              6.410452856,
+              6.395914528,
+              6.333849776
+            ],
+            "median_warm_lm_seconds": 6.395914528,
+            "median_warm_prompt_ms": 1092.11,
+            "median_warm_decode_ms": 4696.34,
+            "median_warm_generated_tokens_per_second": 40.025550510296
+          },
+          {
+            "variant": "amx",
+            "format": "tq2_1",
+            "lm_seconds_all": [
+              5.92074659,
+              5.597674118,
+              5.556595297,
+              5.777366171
+            ],
+            "median_warm_lm_seconds": 5.597674118,
+            "median_warm_prompt_ms": 581.16,
+            "median_warm_decode_ms": 4418.5,
+            "median_warm_generated_tokens_per_second": 45.73328039529864
+          },
+          {
+            "variant": "amx",
+            "format": "ternary-q4_0",
+            "lm_seconds_all": [
+              5.905219567,
+              5.837281818,
+              5.774951824,
+              5.777203353
+            ],
+            "median_warm_lm_seconds": 5.777203353,
+            "median_warm_prompt_ms": 577.33,
+            "median_warm_decode_ms": 4629.53,
+            "median_warm_generated_tokens_per_second": 44.31209780196913
+          }
+        ]
+      }
+    }
+  }
+}

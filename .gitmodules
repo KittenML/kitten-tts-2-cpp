@@ -1,0 +1,3 @@
+[submodule "vendor/kitten-text-processing"]
+	path = vendor/kitten-text-processing
+	url = https://github.com/KittenML/kitten-text-processing.git
