@@ -19,8 +19,8 @@ PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
-manylinux-x86_64-image = "manylinux_2_28"
-manylinux-aarch64-image = "manylinux_2_28"
+manylinux-x86_64-image = "manylinux_2_34"
+manylinux-aarch64-image = "manylinux_2_34"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
