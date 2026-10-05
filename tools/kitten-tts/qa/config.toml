@@ -32,7 +32,7 @@ cmake_args = [
 ]
 python = "3.12"     # builds the normalizer data; its torch provides CPU LibTorch
 torch = "torch"     # pip requirement for LibTorch
-torch_index = ""    # pip index for torch; a target can set the CPU-only one
+torch_index = ""    # pip index for torch; Linux needs the CPU-only one, as PyPI's Linux torch is a CUDA build
 
 # -- Tests --------------------------------------------------------------------
 # The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in.
@@ -116,10 +116,13 @@ runner = "ubuntu-24.04"
 torch_index = "https://download.pytorch.org/whl/cpu"
 cmake_args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
 tests = ["repo_tests", "default", "student_w4", "voice_seed"]
+gating = false
+reason = "vendor/kitten-text-processing does not compile with Clang and libstdc++: normalizer.cpp puts std::pair<std::string, Value> inside Value, and std::pair needs a complete type."
 
 [[target]]
 name = "Linux ARM64"
 runner = "ubuntu-24.04-arm"        # Arm Neoverse, 4 vCPU, 16 GB
+torch_index = "https://download.pytorch.org/whl/cpu"   # PyPI's Linux ARM64 torch is a CUDA build
 
 [[target]]
 name = "macOS Apple Silicon"
