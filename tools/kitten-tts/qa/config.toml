@@ -38,7 +38,9 @@ torch = "torch"     # pip requirement for LibTorch
 torch_index = ""    # pip index for torch; Linux needs the CPU-only one, as PyPI's Linux torch is a CUDA build
 
 # -- Tests --------------------------------------------------------------------
-# The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in.
+# The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in;
+# {threads} is the runner's core count. "default" and "download" run exactly as the
+# README shows them, so kitten-tts's own thread default (8) is tested there.
 #   assets = "local"  the model repo's files, with the cpp manifest added locally (default)
 #   assets = "hub"    the README's download path, exactly as users run it
 #   wer = true        Whisper must hear the spoken text (wer_text if markup is spoken)
@@ -57,18 +59,18 @@ args = ["--text", "{text}", "--output", "{out}"]
 wer = true
 
 [tests.default]
-title = "Speak the sample text, default decoder"
+title = "Speak the sample text, README defaults (8 threads)"
 args = ["--text", "{text}", "--output", "{out}"]
 wer = true
 
 [tests.student_w4]
 title = "Speak with --decoder student_w4"
-args = ["--decoder", "student_w4", "--text", "{text}", "--output", "{out}"]
+args = ["--decoder", "student_w4", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
 wer = true
 
 [tests.student_w8]
 title = "Speak with --decoder student_w8"
-args = ["--decoder", "student_w8", "--text", "{text}", "--output", "{out}"]
+args = ["--decoder", "student_w8", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
 wer = true
 
 [tests.voice_seed]
@@ -80,21 +82,21 @@ repeat_same = true
 
 [tests.expressive]
 title = "Expression tags with --preset expressive"
-args = ["--text", "[joyful] We won the grant <laugh> I can (((hardly))) believe it!", "--voice", "Kiki", "--preset", "expressive", "--output", "{out}"]
+args = ["--text", "[joyful] We won the grant <laugh> I can (((hardly))) believe it!", "--voice", "Kiki", "--preset", "expressive", "--threads", "{threads}", "--output", "{out}"]
 
 [tests.no_repack]
 title = "--no-repack (compact TQ2_1 kernels)"
-args = ["--no-repack", "--text", "{text}", "--output", "{out}"]
+args = ["--no-repack", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
 wer = true
 
 [tests.tokens_only]
 title = "--tokens-only (no waveform decoder)"
-args = ["--tokens-only", "--text", "{text}"]
+args = ["--tokens-only", "--threads", "{threads}", "--text", "{text}"]
 audio = false
 
 [tests.benchmark]
 title = "Benchmark: --repeat 3"
-args = ["--repeat", "3", "--text", "{text}", "--output", "{out}"]
+args = ["--repeat", "3", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
 
 # -- Platforms ----------------------------------------------------------------
 # runner:  a GitHub-hosted runner label (its CPU is recorded in the report).
