@@ -11,8 +11,11 @@ voice = "Bruno"
 # Each runner transcribes its own audio to measure word error rate.
 enabled = true
 model = "openai/whisper-small.en"
-warn_above = 0.15
-fail_above = 0.50
+fail_above = 0.50   # WER above this means the audio does not say the text
+
+[limits]
+step_minutes = 10   # one install, configure, build, model download, test or transcription; stopped and reported past this
+job_minutes = 45    # a whole platform job (GitHub cancels it after this); a target can set timeout_minutes
 
 [report]
 slow_job_minutes = 30
@@ -41,7 +44,6 @@ torch_index = ""    # pip index for torch; Linux needs the CPU-only one, as PyPI
 #   wer = true        Whisper must hear the spoken text (wer_text if markup is spoken)
 #   audio = false     no WAV is expected (--tokens-only)
 #   repeat_same       run twice; the two outputs must be identical
-#   gating = false    report a failure without failing the run (give a reason)
 #   kind = "repo"     the repository's own tests in tools/kitten-tts
 
 [tests.repo_tests]
@@ -53,8 +55,6 @@ title = "Download from Hugging Face and speak (README)"
 assets = "hub"
 args = ["--text", "{text}", "--output", "{out}"]
 wer = true
-gating = false
-reason = "KittenML/kitten-tts-2 has the cpp/ files but its config.json has no cpp manifest, so the runtime refuses to download. Run prepare_model_repo.py and upload config.json to fix."
 
 [tests.default]
 title = "Speak the sample text, default decoder"
@@ -98,9 +98,8 @@ args = ["--repeat", "3", "--text", "{text}", "--output", "{out}"]
 
 # -- Platforms ----------------------------------------------------------------
 # runner:  a GitHub-hosted runner label (its CPU is recorded in the report).
-# expect:  "works" (default) or "build-fails" (known unsupported: passes when the
-#          build fails, flags it when it starts working).
-# gating:  false reports results without failing the run.
+# Nothing here says what should work: the report shows what does, and a pull
+# request fails only when something that works on main stops working.
 # tests:   run only these tests (default: all).
 # events:  run only for these triggers (pull_request, push, workflow_dispatch).
 # cmake_args, torch, torch_index: added to or replacing [build] for this target.
@@ -116,8 +115,6 @@ runner = "ubuntu-24.04"
 torch_index = "https://download.pytorch.org/whl/cpu"
 cmake_args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
 tests = ["repo_tests", "default", "student_w4", "voice_seed"]
-gating = false
-reason = "vendor/kitten-text-processing does not compile with Clang and libstdc++: normalizer.cpp puts std::pair<std::string, Value> inside Value, and std::pair needs a complete type."
 
 [[target]]
 name = "Linux ARM64"
@@ -137,12 +134,8 @@ cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESS
 
 [[target]]
 name = "macOS Intel"
-runner = "macos-15-intel"
-gating = false
-reason = "PyTorch's last Intel macOS release is 2.2.2; the decoders are exported with a newer LibTorch."
+runner = "macos-15-intel"          # Intel Core i7, 4 vCPU, 14 GB
 
 [[target]]
 name = "Windows ARM64"
-runner = "windows-11-arm"
-expect = "build-fails"
-reason = "PyTorch publishes no Windows ARM64 wheels, so there is no LibTorch to build against."
+runner = "windows-11-arm"          # Arm Cobalt 100, 4 vCPU, 16 GB

@@ -4,55 +4,29 @@ import sys
 
 PASSED = "passed"
 FAILED = "failed"
-UNSUPPORTED = "unsupported"   # the build failed, as config.toml says it should
-CHANGED = "changed"           # expected not to build, but now it does
 NO_RESULT = "no-result"       # the job died, timed out or was cancelled
 
-STATUS_LABEL = {
-    PASSED: "Passed",
-    FAILED: "Failed",
-    UNSUPPORTED: "Unsupported (expected)",
-    CHANGED: "Now builds",
-    NO_RESULT: "No result",
-}
-
-
-def test_failures(result):
-    """(test, reason) for every gating test that failed, including WER above the limit."""
-    spec_tests = {t["key"]: t for t in result["spec"]["tests"]}
-    fail_above = result["spec"].get("asr", {}).get("fail_above")
-    out = []
-    for t in result.get("tests", []):
-        if not spec_tests.get(t["key"], {}).get("gating", True):
-            continue
-        if t["status"] != "pass":
-            out.append((t["key"], t.get("error") or t["status"]))
-        elif fail_above is not None and t.get("wer") is not None and t["wer"] > fail_above:
-            out.append((t["key"], f"WER {t['wer']:.0%} is above {fail_above:.0%}"))
-    return out
+STATUS_LABEL = {PASSED: "Works", FAILED: "Does not work", NO_RESULT: "No result"}
 
 
 def classify(result):
-    """(status, reasons, failing) for one platform job's result.json."""
-    spec = result["spec"]
-    expect = spec.get("expect", "works")
-    gating = spec.get("gating", True)
+    """(status, reasons) for one platform job. Whether a failure is new is decided in the report."""
     build = result.get("build") or {}
     if not build:
-        return NO_RESULT, ["the job did not record a build"], gating
+        return NO_RESULT, ["the job did not record a build"]
     if not build.get("ok"):
-        if expect == "build-fails":
-            return UNSUPPORTED, [], False
-        return FAILED, [f"{build.get('stage', 'build')} failed"], gating
-    reasons = [f"{key}: {why}" for key, why in test_failures(result)]
+        return FAILED, [f"{build.get('stage', 'build')}: {build.get('error') or 'failed'}"]
+    fail_above = result["spec"].get("asr", {}).get("fail_above")
+    reasons = []
+    for t in result.get("tests", []):
+        if t["status"] != "pass":
+            reasons.append(f"{t['key']}: {t.get('error') or t['status']}")
+        elif fail_above is not None and t.get("wer") is not None and t["wer"] > fail_above:
+            reasons.append(f"{t['key']}: WER {t['wer']:.0%} is above {fail_above:.0%}")
     asr = result.get("asr") or {}
     if asr.get("status") in ("crash", "timeout"):
         reasons.append(f"WER transcription: {asr.get('error', asr['status'])}")
-    if expect == "build-fails":
-        return CHANGED, reasons, False
-    if reasons:
-        return FAILED, reasons, gating
-    return PASSED, [], False
+    return (FAILED, reasons) if reasons else (PASSED, [])
 
 
 # -- Word error rate --------------------------------------------------------------

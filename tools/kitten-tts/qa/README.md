@@ -4,8 +4,21 @@
 GitHub-hosted runners (Linux, Windows and macOS; x86_64 and ARM; Intel, AMD and Apple CPUs),
 runs the README's examples, and posts one report to the pull request.
 
+It assumes nothing about what should work. It answers two questions:
+
+- **What works where?** Every platform builds and runs every test, and the report shows
+  what works, with the build's or the test's own error for everything that does not.
+- **Did this change break anything?** Each run is compared with the latest finished run
+  on `main` (or this branch's previous run when `main` has none). The run fails only when
+  something that works there stops working here. What does not work on `main` either is
+  listed, not failed; what starts working is marked **new**. A test failure on a CPU the
+  `main` run never drew is reported but not counted, since runner CPUs are assigned at
+  random. The first run, with nothing to compare with, only reports.
+
 It runs on pull requests and pushes to `main` that touch kitten-tts, GGML, llama, the
-normalizer or the build. You can also start it from the Actions tab.
+normalizer or the build. You can also start it from the Actions tab. Every install,
+build, model download, test and transcription is stopped after `[limits] step_minutes`
+(10 min), and a job after `[limits] job_minutes` (45).
 
 ## What each job does
 
@@ -27,13 +40,13 @@ normalizer or the build. You can also start it from the Actions tab.
 - **Tests:** one row per README example and one column per platform.
 - **Speed:** the real-time factor kitten-tts reports for each decoder, warm (`--repeat 3`),
   and LM tokens per second.
-- **Failures:** one line each, with a link to the job's log and the log's tail.
+- **Broke since the baseline:** one line per broken test, with a link to the job's log and
+  the log's tail. The run summary also lists everything that does not work, with logs.
 
 The run summary also has every test's numbers: time, LM and decoder seconds, audio length,
 tokens, WER and what Whisper heard. Audio is attached to each job.
 
-The run fails when a supported platform fails to build, a gating test fails, a job produces
-no result, or WER is above `asr.fail_above`.
+The run fails only when something that works in the `main` run breaks here.
 
 ## Changing what is tested
 
@@ -44,11 +57,10 @@ Edit [`config.toml`](config.toml). The workflow needs no changes.
 | Add a platform or compiler | Add a `[[target]]` with a runner label, plus `cmake_args` if needed |
 | Add a README example | Add a `[tests.<key>]` with its `args` ({text}, {voice}, {threads}, {out}) |
 | Run some tests on one platform only | `tests = [...]` on the target |
-| Report a test without failing the run | `gating = false` and a `reason` on the test |
-| Mark a platform known-unsupported | `expect = "build-fails"` and a `reason` |
 | Run a platform only on PRs or only on `main` | `events = [...]` |
 | Change the CMake line or LibTorch | `[build]`, or the same keys on a target |
-| Change the spoken text, WER limits or ASR model | `[sample]`, `[asr]` |
+| Change the spoken text, WER limit or ASR model | `[sample]`, `[asr]` |
+| Change the time limits | `[limits]`, or `timeout_minutes` on a target |
 
 `python tools/kitten-tts/qa/plan.py` checks the config and prints the jobs. The Plan job
 runs it too, with `python -m unittest discover -s tools/kitten-tts/qa/tests`.

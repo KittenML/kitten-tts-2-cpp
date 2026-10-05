@@ -17,11 +17,9 @@ import sys
 import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEST_KEYS = {"title", "kind", "args", "assets", "wer", "wer_text", "audio", "repeat_same", "gating", "reason",
-             "timeout_minutes"}
-TARGET_KEYS = {"name", "runner", "expect", "gating", "reason", "tests", "events", "cmake_args", "torch",
-               "torch_index", "python", "timeout_minutes"}
-EXPECTS = {"works", "build-fails"}
+TEST_KEYS = {"title", "kind", "args", "assets", "wer", "wer_text", "audio", "repeat_same"}
+TARGET_KEYS = {"name", "runner", "tests", "events", "cmake_args", "torch", "torch_index", "python",
+               "timeout_minutes"}
 EVENTS = {"pull_request", "push", "workflow_dispatch"}
 PLACEHOLDERS = {"text", "voice", "threads", "out"}
 
@@ -53,8 +51,8 @@ def load(path):
             for name in re.findall(r"{(\w+)}", arg):
                 if name not in PLACEHOLDERS:
                     errors.append(f"{where}: unknown placeholder {{{name}}} (known: {sorted(PLACEHOLDERS)})")
-        if t.get("gating", True) is False and not t.get("reason"):
-            errors.append(f"{where}: a non-gating test needs a reason")
+    for k in set(cfg.get("limits", {})) - {"step_minutes", "job_minutes"}:
+        errors.append(f"limits: unknown setting {k!r}")
     names = set()
     for t in cfg.get("target", []):
         where = f"target {t.get('name', '?')!r}"
@@ -66,8 +64,6 @@ def load(path):
         if t.get("name") in names:
             errors.append(f"{where}: duplicate name")
         names.add(t.get("name"))
-        if t.get("expect", "works") not in EXPECTS:
-            errors.append(f"{where}: expect must be one of {sorted(EXPECTS)}")
         for e in t.get("events", []):
             if e not in EVENTS:
                 errors.append(f"{where}: unknown event {e!r}")
@@ -84,6 +80,7 @@ def expand(cfg):
     only_tests = csv_env("QA_TESTS")
     event = os.environ.get("GITHUB_EVENT_NAME")   # unset locally: plan every target
     build = cfg.get("build", {})
+    limits = {"step_minutes": 10, "job_minutes": 45, **cfg.get("limits", {})}
     jobs = []
     for t in cfg["target"]:
         if event and t.get("events") and event not in t["events"]:
@@ -95,7 +92,7 @@ def expand(cfg):
             if only_tests and key not in only_tests:
                 continue
             test = {"key": key, "kind": "cli", "assets": "local", "wer": False, "audio": True,
-                    "repeat_same": False, "gating": True, "reason": "", "timeout_minutes": 15}
+                    "repeat_same": False}
             test.update(cfg["tests"][key])
             test.setdefault("title", key)
             tests.append(test)
@@ -103,9 +100,6 @@ def expand(cfg):
             "id": slug(t["name"]),
             "name": t["name"],
             "runner": t["runner"],
-            "expect": t.get("expect", "works"),
-            "gating": t.get("gating", True),
-            "reason": t.get("reason", ""),
             "build": {
                 "cmake_args": build.get("cmake_args", []) + t.get("cmake_args", []),
                 "python": t.get("python", build.get("python", "3.12")),
@@ -115,10 +109,10 @@ def expand(cfg):
             "text": cfg["sample"]["text"],
             "voice": cfg["sample"]["voice"],
             "asr": cfg.get("asr", {"enabled": False}),
+            "limits": limits,
             "tests": tests,
         }
-        timeout = t.get("timeout_minutes") or min(360, 40 + sum(x["timeout_minutes"] * (2 if x["repeat_same"] else 1)
-                                                                for x in tests))
+        timeout = t.get("timeout_minutes") or limits["job_minutes"]
         jobs.append({"id": spec["id"], "name": t["name"], "runner": t["runner"], "python": spec["build"]["python"],
                      "timeout": timeout, "spec": json.dumps(spec)})
     if not jobs:

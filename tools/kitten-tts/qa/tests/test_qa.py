@@ -13,9 +13,10 @@ sys.path.insert(0, QA)
 import plan  # noqa: E402
 import report  # noqa: E402
 import run_target  # noqa: E402
-from common import CHANGED, FAILED, NO_RESULT, PASSED, UNSUPPORTED, classify, exit_reason, wer  # noqa: E402
+from common import FAILED, NO_RESULT, PASSED, classify, exit_reason, wer  # noqa: E402
 
-ASR = {"enabled": True, "model": "openai/whisper-small.en", "warn_above": 0.15, "fail_above": 0.5}
+OK, BAD, LATE = "\u2705", "\u274c", "\u23f1\ufe0f"
+ASR = {"enabled": True, "model": "openai/whisper-small.en", "fail_above": 0.5}
 
 # Tests use this, not config.toml, so editing the real config never breaks them.
 FIXTURE = """
@@ -33,8 +34,6 @@ wer = true
 [tests.download]
 assets = "hub"
 args = ["--text", "{text}", "--output", "{out}"]
-gating = false
-reason = "no manifest"
 
 [[target]]
 name = "Linux x64"
@@ -50,10 +49,8 @@ tests = ["default"]
 
 
 def spec(**kw):
-    s = {"id": "linux-x64", "name": "Linux x64", "runner": "ubuntu-24.04", "expect": "works", "gating": True,
-         "reason": "", "text": "Hello there.", "voice": "Bruno", "asr": ASR, "build": {},
-         "tests": [{"key": "default", "title": "Speak", "gating": True},
-                   {"key": "download", "title": "Download", "gating": False, "reason": "no manifest"}]}
+    s = {"id": "linux-x64", "name": "Linux x64", "runner": "ubuntu-24.04", "text": "Hello there.", "voice": "Bruno",
+         "asr": ASR, "build": {}, "tests": [{"key": "default", "title": "Speak"}, {"key": "download", "title": "Download"}]}
     s.update(kw)
     return s
 
@@ -65,9 +62,8 @@ def test(key="default", status="pass", **kw):
     return t
 
 
-def result(s=None, built=True, tests=None):
-    r = {"spec": s or spec(), "env": {"cpu": "AMD EPYC 7763 64-Core Processor", "cpu_count": 4, "ram_gb": 15.6,
-                                      "features": ["avx2"]},
+def result(s=None, built=True, tests=None, cpu="AMD EPYC 7763 64-Core Processor"):
+    r = {"spec": s or spec(), "env": {"cpu": cpu, "cpu_count": 4, "ram_gb": 15.6, "features": ["avx2"]},
          "build": {"ok": built, "stage": "done" if built else "build", "build_secs": 240, "setup_secs": 60}}
     if built:
         r["tests"] = tests if tests is not None else [test(), test("download", "fail", error="no cpp assets")]
@@ -77,31 +73,11 @@ def result(s=None, built=True, tests=None):
 
 
 class Classify(unittest.TestCase):
-    def test_pass_ignores_non_gating_test(self):
-        self.assertEqual(classify(result())[0], PASSED)
-
-    def test_gating_test_failure_fails(self):
-        status, reasons, failing = classify(result(tests=[test(status="fail", error="boom")]))
-        self.assertEqual((status, failing), (FAILED, True))
-        self.assertIn("boom", reasons[0])
-
-    def test_wer_above_limit_fails(self):
+    def test_statuses(self):
+        self.assertEqual(classify(result(tests=[test(), test("download")]))[0], PASSED)
+        self.assertEqual(classify(result())[0], FAILED)                       # download fails
+        self.assertEqual(classify(result(built=False)), (FAILED, ["build: error: no LibTorch"]))
         self.assertEqual(classify(result(tests=[test(wer=0.9)]))[0], FAILED)
-
-    def test_build_failure(self):
-        self.assertEqual(classify(result(built=False))[0::2], (FAILED, True))
-        self.assertEqual(classify(result(spec(expect="build-fails"), built=False))[0::2], (UNSUPPORTED, False))
-        self.assertEqual(classify(result(spec(expect="build-fails")))[0::2], (CHANGED, False))
-
-    def test_non_gating_platform(self):
-        self.assertEqual(classify(result(spec(gating=False), built=False))[0::2], (FAILED, False))
-
-    def test_crashed_transcription_fails(self):
-        r = result()
-        r["asr"] = {"status": "crash", "error": "stopped"}
-        self.assertEqual(classify(r)[0], FAILED)
-
-    def test_no_build_record_is_no_result(self):
         self.assertEqual(classify({"spec": spec()})[0], NO_RESULT)
 
 
@@ -126,10 +102,14 @@ class Helpers(unittest.TestCase):
         a, rate = run_target.read_wav(f.name)
         self.assertEqual((rate, list(a)), (24000, samples))
 
-    def test_fill_and_buffers(self):
+    def test_log_parsing(self):
         self.assertEqual(run_target.fill("--threads={threads}", {"threads": 4}), "--threads=4")
         log = "load_tensors:   CPU_Mapped model buffer size = 975.60 MiB\nload_tensors:   AMX model buffer size = 1.0 MiB"
         self.assertEqual(run_target.weight_buffers(log), ["AMX", "CPU_Mapped"])
+        make = "x.cpp:1:2: error: no type named 'strong_ordering'\n1 error generated.\ngmake: *** [all] Error 2"
+        self.assertEqual(run_target.last_error(make), "x.cpp:1:2: error: no type named 'strong_ordering'")
+        msvc = "llama-chat.cpp(561,16): error C2088: built-in operator '<<' cannot be applied\nfoo"
+        self.assertIn("error C2088", run_target.last_error(msvc))
 
 
 class Plan(unittest.TestCase):
@@ -144,7 +124,7 @@ class Plan(unittest.TestCase):
         old = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
-            return plan.expand(plan.load(path))
+            return [json.loads(j["spec"]) for j in plan.expand(plan.load(path))]
         finally:
             for k, v in old.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
@@ -156,32 +136,39 @@ class Plan(unittest.TestCase):
 
     def test_cmake_args_add_up_and_events_filter(self):
         path = self.write(FIXTURE)
-        jobs = self.expand(path, GITHUB_EVENT_NAME="pull_request")
-        self.assertEqual([j["name"] for j in jobs], ["Linux x64"])
-        self.assertEqual(json.loads(jobs[0]["spec"])["build"]["cmake_args"], ["-DA=1", "-DB=2"])
-        jobs = self.expand(path, GITHUB_EVENT_NAME="push", QA_TESTS="default")
-        self.assertEqual([[t["key"] for t in json.loads(j["spec"])["tests"]] for j in jobs], [["default"], ["default"]])
+        specs = self.expand(path, GITHUB_EVENT_NAME="pull_request")
+        self.assertEqual([s["name"] for s in specs], ["Linux x64"])
+        self.assertEqual(specs[0]["build"]["cmake_args"], ["-DA=1", "-DB=2"])
+        self.assertEqual(specs[0]["limits"], {"step_minutes": 10, "job_minutes": 45})
+        specs = self.expand(path, GITHUB_EVENT_NAME="push", QA_TESTS="default")
+        self.assertEqual([[t["key"] for t in s["tests"]] for s in specs], [["default"], ["default"]])
 
     def test_invalid_config_is_rejected(self):
-        path = self.write('[sample]\ntext="x"\nvoice="Bruno"\n[tests.a]\nargs=["{bogus}"]\ngating=false\n'
-                          '[[target]]\nname="A"\nrunner="r"\ntests=["missing"]\nexpect="maybe"\n')
+        path = self.write('[sample]\ntext="x"\nvoice="Bruno"\n[tests.a]\nargs=["{bogus}"]\n[limits]\nstep=1\n'
+                          '[[target]]\nname="A"\nrunner="r"\ntests=["missing"]\ngating=false\n')
         with self.assertRaises(SystemExit) as e:
             plan.load(path)
-        for bit in ("unknown placeholder {bogus}", "needs a reason", "unknown test 'missing'", "expect must be"):
+        for bit in ("unknown placeholder {bogus}", "unknown test 'missing'", "unknown setting 'gating'",
+                    "limits: unknown setting 'step'"):
             self.assertIn(bit, str(e.exception))
 
 
 class Report(unittest.TestCase):
-    def run_report(self, results, planned=None, jobs=None):
+    def run_report(self, results, baseline=None, planned=None, jobs=None):
         d = tempfile.mkdtemp()
-        for i, r in enumerate(results):
-            os.makedirs(os.path.join(d, "results", str(i)))
-            with open(os.path.join(d, "results", str(i), "result.json"), "w") as f:
-                json.dump(r, f)
+        for name, rs in (("results", results), ("baseline", baseline or [])):
+            os.makedirs(os.path.join(d, name))
+            for i, r in enumerate(rs):
+                os.makedirs(os.path.join(d, name, str(i)))
+                with open(os.path.join(d, name, str(i), "result.json"), "w") as f:
+                    json.dump(r, f)
+        if baseline is not None:
+            with open(os.path.join(d, "baseline", "about.json"), "w") as f:
+                json.dump({"run_id": 1, "label": "main"}, f)
         with open(os.path.join(d, "plan.json"), "w") as f:
             json.dump({"report": {"slow_job_minutes": 30}, "jobs": planned or [r["spec"] for r in results]}, f)
         args = [sys.executable, os.path.join(QA, "report.py"), os.path.join(d, "results"), os.path.join(d, "out"),
-                "--plan", os.path.join(d, "plan.json")]
+                "--plan", os.path.join(d, "plan.json"), "--baseline", os.path.join(d, "baseline")]
         if jobs is not None:
             with open(os.path.join(d, "jobs.json"), "w") as f:
                 json.dump(jobs, f)
@@ -192,41 +179,67 @@ class Report(unittest.TestCase):
         with open(os.path.join(d, "out", "pr-comment.md"), encoding="utf-8") as f:
             return f.read(), gate.returncode
 
-    def test_pass(self):
+    def test_first_run_reports_only(self):
         md, code = self.run_report([result()])
         self.assertEqual(code, 0)
-        self.assertIn("The supported platform passed", md)
-        self.assertIn("| Linux x64 | AMD EPYC 7763<br>4 cores / 16 GB<br>AVX2 | ✅ 4 min | ✅ 1/1 | CPU_Mapped |", md)
-        self.assertIn("| Speak | ✅ |", md)
-        self.assertIn("| Download | ⚠️ |", md)
-        self.assertIn("Download: does not fail the run. no manifest", md)
-        self.assertNotIn("### Failures", md)
+        self.assertIn("Report only: there is no earlier run to compare with yet", md)
+        self.assertIn(f"| Test | Linux x64<br>AMD EPYC 7763 |", md)
+        self.assertIn(f"| Speak | {OK} |", md)
+        self.assertIn(f"| Download | {BAD} |", md)
+        self.assertIn("- Linux x64: download: no cpp assets", md)
 
-    def test_failure_links_log_and_keeps_footer(self):
+    def test_a_test_that_works_on_main_and_breaks_fails_the_run(self):
+        now = [result(tests=[test(status="fail", error="kitten-tts exited", log_tail="Killed"),
+                             test("download", "fail", error="no cpp assets")])]
         jobs = [{"name": "Linux x64", "html_url": "https://example.test/1", "started_at": "2026-10-05T10:00:00Z",
                  "completed_at": "2026-10-05T10:40:00Z"}]
-        md, code = self.run_report([result(tests=[test(status="fail", error="kitten-tts exited", log_tail="Killed")])],
-                                   jobs=jobs)
+        md, code = self.run_report(now, baseline=[result()], jobs=jobs)
         self.assertEqual(code, 1)
+        self.assertIn("1 test broke compared with main", md)
+        self.assertIn(f"| Speak | {BAD} new |", md)
+        self.assertIn(f"| Download | {BAD} |", md)                  # failed on main too: listed, not failed
         self.assertIn("**Linux x64** - Speak: kitten-tts exited - [log](https://example.test/1)", md)
         self.assertIn("````\nKilled\n````", md)
         self.assertIn("\U0001f422 40 min", md)
         self.assertTrue(md.rstrip().endswith("</details>"))
 
-    def test_unsupported_missing_and_wer(self):
-        arm = result(spec(id="win-arm", name="Windows ARM64", expect="build-fails", reason="no LibTorch"), built=False)
-        missing = spec(id="mac", name="macOS")
-        wer_bad = result(tests=[test(wer=0.8, transcript="something else")])
-        md, code = self.run_report([wer_bad, arm], planned=[wer_bad["spec"], arm["spec"], missing])
+    def test_failure_on_a_new_cpu_is_reported_not_failed(self):
+        now = [result(tests=[test(status="fail", error="illegal CPU instruction"), test("download", "fail")],
+                      cpu="INTEL(R) XEON(R) PLATINUM 8573C")]
+        md, code = self.run_report(now, baseline=[result()])
+        self.assertEqual(code, 0)
+        self.assertIn("**On a CPU the baseline never drew**, so not counted as broken: "
+                      "Linux x64 on Intel Xeon Platinum 8573C", md)
+
+    def test_a_build_that_breaks_fails_even_on_a_new_cpu(self):
+        md, code = self.run_report([result(built=False, cpu="Another CPU")], baseline=[result()])
         self.assertEqual(code, 1)
-        self.assertIn("not supported, as expected: Windows ARM64 (no LibTorch)", md)
-        self.assertIn("**macOS**: no result", md)
-        self.assertIn("Speak: WER 80.0%, Whisper heard \"something else\"", md)
+
+    def test_platform_that_never_built_is_listed_and_one_that_starts_is_marked(self):
+        arm = spec(id="win-arm", name="Windows ARM64")
+        md, code = self.run_report([result(arm, built=False), result()],
+                                   baseline=[result(arm, built=False), result(built=False)])
+        self.assertEqual(code, 0)
+        self.assertIn("- Windows ARM64: build: error: no LibTorch", md)
+        self.assertIn(f"{OK} new 4 min", md)
+        self.assertIn("**Works now, did not before:** Linux x64", md)
+
+    def test_missing_job_and_timeouts(self):
+        md, code = self.run_report([result(tests=[test(status="timeout", error="took longer than 10 min")])],
+                                   baseline=[result(), result(spec(id="mac", name="macOS"))],
+                                   planned=[spec(), spec(id="mac", name="macOS")])
+        self.assertEqual(code, 1)
+        self.assertIn(f"| Speak | {LATE} new |", md)
+        self.assertIn(f"{LATE} new", self.row(md, "macOS"))
+
+    def row(self, md, name):
+        return next(l for l in md.splitlines() if l.startswith(f"| {name} |"))
 
     def test_comment_size_limit(self):
-        big = [result(spec(id=f"p{i}", name=f"P{i}"), tests=[test(status="fail", error="x" * 300, log_tail="t" * 5000)])
-               for i in range(60)]
-        md, code = self.run_report(big)
+        def job(i, **kw):
+            return result(spec(id=f"p{i}", name=f"P{i}"), **kw)
+        now = [job(i, tests=[test(status="fail", error="x" * 300, log_tail="t" * 5000)]) for i in range(60)]
+        md, code = self.run_report(now, baseline=[job(i, tests=[test()]) for i in range(60)])
         self.assertLessEqual(len(md), report.COMMENT_LIMIT)
         self.assertEqual(code, 1)
 

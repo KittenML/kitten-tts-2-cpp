@@ -87,8 +87,16 @@ def system_info():
 
 # -- Setup and build ----------------------------------------------------------------
 
-def step(cmd, log_path, cwd=None, env=None, timeout=None):
-    """Run a command into a log file; (ok, secs, last lines)."""
+def step_limit(spec):
+    return int(spec.get("limits", {}).get("step_minutes", 10) * 60)
+
+
+def span(secs):
+    return f"{secs // 60} min" if secs >= 60 else f"{secs} s"
+
+
+def step(cmd, log_path, timeout, cwd=None, env=None):
+    """Run a command into a log file; (ok, secs, last lines). A timeout ends with a line saying so."""
     t0 = time.time()
     with open(log_path, "a", encoding="utf-8") as log:
         log.write("$ " + " ".join(cmd) + "\n")
@@ -97,6 +105,7 @@ def step(cmd, log_path, cwd=None, env=None, timeout=None):
             code = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=cwd, env=env, timeout=timeout).returncode
         except subprocess.TimeoutExpired:
             code = None
+            log.write(f"\nERROR: took longer than {span(timeout)}, stopped\n")
     with open(log_path, encoding="utf-8", errors="replace") as f:
         tail = f.read()[-3000:]
     return code == 0, round(time.time() - t0, 1), tail
@@ -105,16 +114,17 @@ def step(cmd, log_path, cwd=None, env=None, timeout=None):
 def setup_and_build(spec, out):
     """Install torch (LibTorch) and the QA tools, then configure and build kitten-tts as the README does."""
     b = spec["build"]
+    limit = step_limit(spec)
     log = os.path.join(out, "build.log")
     res = {"ok": False, "stage": "setup"}
     pip = [sys.executable, "-m", "pip", "install", "-q"]
     t0 = time.time()
-    ok, _, tail = step(pip + ["-U", "pip"], log)
+    ok, _, tail = step(pip + ["-U", "pip"], log, limit)
     torch_cmd = pip + [b["torch"]] + (["--index-url", b["torch_index"]] if b["torch_index"] else [])
-    ok, _, tail = step(torch_cmd, log)
+    ok, _, tail = step(torch_cmd, log, limit)
     extra = ["numpy", "huggingface_hub", "cmake"] + (["transformers"] if spec["asr"].get("enabled") else [])
     if ok:
-        ok, _, tail = step(pip + extra, log)
+        ok, _, tail = step(pip + extra, log, limit)
     res["setup_secs"] = round(time.time() - t0, 1)
     if not ok:
         res.update(error=last_error(tail), log_tail=tail)
@@ -127,11 +137,11 @@ def setup_and_build(spec, out):
     build_dir = os.path.join(ROOT, "build")
     configure = [cmake, "-S", ROOT, "-B", build_dir] + b["cmake_args"] + [
         f"-DCMAKE_PREFIX_PATH={prefix}", f"-DPython3_EXECUTABLE={sys.executable}"]
-    ok, secs_c, tail = step(configure, log, cwd=ROOT)
+    ok, secs_c, tail = step(configure, log, limit, cwd=ROOT)
     if ok:
         jobs = str(os.cpu_count() or 2)
         ok, secs_b, tail = step([cmake, "--build", build_dir, "--target", "kitten-tts", "--config", "Release",
-                                 "--parallel", jobs], log, cwd=ROOT)
+                                 "--parallel", jobs], log, limit, cwd=ROOT)
         res["build_secs"] = round(secs_c + secs_b, 1)
     if not ok:
         res.update(error=last_error(tail), log_tail=tail)
@@ -146,9 +156,11 @@ def setup_and_build(spec, out):
 
 
 def last_error(tail):
+    """The line that says what went wrong: the first compiler 'error:', else the last error line."""
     lines = [l for l in tail.strip().splitlines() if l.strip()]
+    compiler = [l for l in lines if re.search(r"\berror( [A-Z]+\d+)?:", l)]
     errors = [l for l in lines if re.search(r"error|Error|ERROR|fatal", l)]
-    return (errors[-1] if errors else lines[-1] if lines else "failed").strip()[:300]
+    return (compiler[0] if compiler else errors[-1] if errors else lines[-1] if lines else "failed").strip()[:300]
 
 
 def run_env(binary):
@@ -183,6 +195,20 @@ def prepare_assets(work):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=1)
     return {"dir": root, "secs": round(time.time() - t0, 1), "hub_has_manifest": had_manifest}
+
+
+def download_assets(spec, out, work):
+    """prepare_assets() in its own process, so a stalled download is stopped at the step limit."""
+    path = os.path.join(work, "assets.json")
+    if os.path.exists(path):
+        os.remove(path)
+    ok, secs, tail = step([sys.executable, os.path.abspath(__file__), "--spec", os.path.join(out, "spec.json"),
+                           "--out", out, "--work", work, "--child", "assets"], os.path.join(out, "logs", "assets.log"),
+                          step_limit(spec))
+    if ok and os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return {"error": last_error(tail), "secs": secs}
 
 
 # -- Tests --------------------------------------------------------------------------
@@ -259,16 +285,20 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
     report = os.path.join(out, "reports", f"{key}.json")
     values = {"text": spec["text"], "voice": spec["voice"], "threads": os.cpu_count() or 4, "out": wav}
     args = [fill(a, values) for a in test["args"]]
+    if test["assets"] == "local" and not (assets or {}).get("dir"):
+        return {"key": key, "status": "fail", "secs": 0,
+                "error": f"model files were not downloaded: {(assets or {}).get('error', 'unknown error')}"}
     where = (["--assets", assets["dir"]] if test["assets"] == "local" else
              ["--cache-dir", os.path.join(work, "hub-cache")])
     res = {"key": key, "status": "pass"}
     code, secs, log = run_cli(binary, env, where + args + ["--report", report],
-                              os.path.join(out, "logs", f"{key}.log"), int(test["timeout_minutes"] * 60))
+                              os.path.join(out, "logs", f"{key}.log"), step_limit(spec))
     res["secs"] = secs
     res["buffers"] = weight_buffers(log)
     if code != 0:
         said = re.findall(r"^kitten-tts: (.+)$", log, re.M)
-        error = f"kitten-tts {exit_reason(code)}" + (f": {said[-1]}" if said else "")
+        error = (f"took longer than {span(step_limit(spec))}, stopped" if code is None else
+                 f"kitten-tts {exit_reason(code)}" + (f": {said[-1]}" if said else ""))
         res.update(status="timeout" if code is None else "fail", error=error[:400], log_tail=log[-2500:])
         return res
     try:
@@ -289,7 +319,7 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
         if test["repeat_same"]:
             again_wav, again_rep = wav[:-4] + "-again.wav", report[:-5] + "-again.json"
             code2, _, log2 = run_cli(binary, env, where + [again_wav if a == wav else a for a in args] + [
-                "--report", again_rep], os.path.join(out, "logs", f"{key}-again.log"), int(test["timeout_minutes"] * 60))
+                "--report", again_rep], os.path.join(out, "logs", f"{key}-again.log"), step_limit(spec))
             assert code2 == 0, f"second run {exit_reason(code2)}"
             with open(again_rep, encoding="utf-8") as f:
                 rep2 = json.load(f)
@@ -305,14 +335,14 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
     return res
 
 
-def run_repo_tests(binary, env, out):
+def run_repo_tests(binary, env, out, limit):
     """The repository's own kitten-tts tests."""
     res = {"key": "repo_tests", "status": "pass", "files": []}
     t0 = time.time()
     for name, cmd in (("test_assets.py", [sys.executable, os.path.join(ROOT, "tools/kitten-tts/test_assets.py"), binary]),
                       ("test_tq2.py", [sys.executable, os.path.join(ROOT, "tools/kitten-tts/test_tq2.py")])):
         log_path = os.path.join(out, "logs", f"repo-{name}.log")
-        ok, secs, tail = step(cmd, log_path, cwd=ROOT, env=env, timeout=600)
+        ok, secs, tail = step(cmd, log_path, limit, cwd=ROOT, env=env)
         res["files"].append({"name": name, "ok": ok, "secs": secs})
         if not ok:
             res["status"] = "fail"
@@ -354,7 +384,8 @@ def run_asr(spec, out, refs):
         json.dump(refs, f)
     log_path = os.path.join(out, "logs", "asr.log")
     ok, secs, tail = step([sys.executable, "-X", "faulthandler", os.path.abspath(__file__), "--spec",
-                           os.path.join(out, "spec.json"), "--out", out, "--child", "asr"], log_path, timeout=1800)
+                           os.path.join(out, "spec.json"), "--out", out, "--child", "asr"], log_path,
+                          (2 + len(refs)) * step_limit(spec))
     path = os.path.join(out, "asr.json")
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -383,11 +414,11 @@ def drive(spec_path, out, work):
         env = run_env(binary)
         assets = None
         if any(t["kind"] == "cli" and t["assets"] == "local" for t in spec["tests"]):
-            assets = result["assets"] = prepare_assets(work)
+            assets = result["assets"] = download_assets(spec, out, work)
         result["tests"], refs = [], []
         for test in spec["tests"]:
             if test["kind"] == "repo":
-                row = run_repo_tests(binary, env, out)
+                row = run_repo_tests(binary, env, out, step_limit(spec))
             else:
                 row = run_cli_test(test, spec, binary, env, assets, out, work)
             print(f"  {test['key']}: {row['status']} ({row.get('secs')}s) {row.get('error', '')}", flush=True)
@@ -403,14 +434,15 @@ def drive(spec_path, out, work):
                     test["asr_error"] = row["error"]
 
     result["secs"] = round(time.time() - t_start, 1)
-    status, reasons, failing = classify(result)
-    result["status"], result["reasons"], result["failing"] = status, reasons, failing
+    status, reasons = classify(result)
+    result["status"], result["reasons"] = status, reasons
     with open(os.path.join(out, "result.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, indent=1)
     print(f"\n{spec['name']}: {STATUS_LABEL[status]}", flush=True)
     for r in reasons:
         print(f"  - {r}", flush=True)
-    return 1 if failing else 0
+    # The verdict (did this break something that works on main?) is the report job's.
+    return 0
 
 
 def main():
@@ -423,6 +455,10 @@ def main():
     if args.child == "asr":
         with open(args.spec, encoding="utf-8") as f:
             child_asr(json.load(f), args.out)
+        return
+    if args.child == "assets":
+        with open(os.path.join(args.work, "assets.json"), "w", encoding="utf-8") as f:
+            json.dump(prepare_assets(args.work), f)
         return
     sys.exit(drive(args.spec, os.path.abspath(args.out), args.work))
 
