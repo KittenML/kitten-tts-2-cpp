@@ -127,7 +127,7 @@ def setup_and_build(spec, out):
         ok, _, tail = step(pip + extra, log, limit)
     res["setup_secs"] = round(time.time() - t0, 1)
     if not ok:
-        res.update(error=last_error(tail), log_tail=tail)
+        res.update(error=last_error(read_log(log)), log_tail=tail)
         return res
     res["torch"] = _run([sys.executable, "-c", "import torch; print(torch.__version__)"])
     prefix = _run([sys.executable, "-c", "import torch; print(torch.utils.cmake_prefix_path)"])
@@ -144,7 +144,7 @@ def setup_and_build(spec, out):
                                  "--parallel", jobs], log, limit, cwd=ROOT)
         res["build_secs"] = round(secs_c + secs_b, 1)
     if not ok:
-        res.update(error=last_error(tail), log_tail=tail)
+        res.update(error=last_error(read_log(log)), log_tail=tail)
         return res
     found = [p for p in glob.glob(os.path.join(build_dir, "bin", "**", "kitten-tts" + EXE), recursive=True)
              if os.path.isfile(p)]
@@ -153,6 +153,11 @@ def setup_and_build(spec, out):
         return res
     res.update(ok=True, stage="done", binary=found[0])
     return res
+
+
+def read_log(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
 
 
 def last_error(tail):
