@@ -1,0 +1,142 @@
+# What the kitten-tts QA workflow tests. Edit this file, not the workflow.
+#
+# Each target builds kitten-tts on one GitHub-hosted runner with the README's
+# commands, runs the README's examples, and reports to the pull request.
+
+[sample]
+text = "Kitten TTS runs fully on your device and creates clear speech quickly. This benchmark compares every model for speed, quality, and consistency."
+voice = "Bruno"
+
+[asr]
+# Each runner transcribes its own audio to measure word error rate.
+enabled = true
+model = "openai/whisper-small.en"
+warn_above = 0.15
+fail_above = 0.50
+
+[report]
+slow_job_minutes = 30
+
+[build]
+# The README's configure line. A target can add cmake_args.
+cmake_args = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DCMAKE_CXX_STANDARD=20",
+  "-DCMAKE_CXX_STANDARD_REQUIRED=ON",
+  "-DGGML_CUDA=OFF",
+  "-DGGML_METAL=OFF",
+  "-DLLAMA_BUILD_KITTEN_TTS=ON",
+  "-DLLAMA_BUILD_SERVER=OFF",
+  "-DLLAMA_BUILD_TESTS=OFF",
+  "-DLLAMA_BUILD_EXAMPLES=OFF",
+]
+python = "3.12"     # builds the normalizer data; its torch provides CPU LibTorch
+torch = "torch"     # pip requirement for LibTorch
+torch_index = ""    # pip index for torch; a target can set the CPU-only one
+
+# -- Tests --------------------------------------------------------------------
+# The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in.
+#   assets = "local"  the model repo's files, with the cpp manifest added locally (default)
+#   assets = "hub"    the README's download path, exactly as users run it
+#   wer = true        Whisper must hear the spoken text (wer_text if markup is spoken)
+#   audio = false     no WAV is expected (--tokens-only)
+#   repeat_same       run twice; the two outputs must be identical
+#   gating = false    report a failure without failing the run (give a reason)
+#   kind = "repo"     the repository's own tests in tools/kitten-tts
+
+[tests.repo_tests]
+title = "Repo tests: test_assets.py, test_tq2.py"
+kind = "repo"
+
+[tests.download]
+title = "Download from Hugging Face and speak (README)"
+assets = "hub"
+args = ["--text", "{text}", "--output", "{out}"]
+wer = true
+gating = false
+reason = "KittenML/kitten-tts-2 has the cpp/ files but its config.json has no cpp manifest, so the runtime refuses to download. Run prepare_model_repo.py and upload config.json to fix."
+
+[tests.default]
+title = "Speak the sample text, default decoder"
+args = ["--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.student_w4]
+title = "Speak with --decoder student_w4"
+args = ["--decoder", "student_w4", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.student_w8]
+title = "Speak with --decoder student_w8"
+args = ["--decoder", "student_w8", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.voice_seed]
+title = "--voice Bruno --seed 1234 gives the same audio twice"
+args = ["--text", "Hello there. This is Kitten T T S running on the CPU.", "--voice", "Bruno", "--threads", "{threads}", "--seed", "1234", "--output", "{out}"]
+wer = true
+wer_text = "Hello there. This is Kitten TTS running on the CPU."
+repeat_same = true
+
+[tests.expressive]
+title = "Expression tags with --preset expressive"
+args = ["--text", "[joyful] We won the grant <laugh> I can (((hardly))) believe it!", "--voice", "Kiki", "--preset", "expressive", "--output", "{out}"]
+
+[tests.no_repack]
+title = "--no-repack (compact TQ2_1 kernels)"
+args = ["--no-repack", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.tokens_only]
+title = "--tokens-only (no waveform decoder)"
+args = ["--tokens-only", "--text", "{text}"]
+audio = false
+
+[tests.benchmark]
+title = "Benchmark: --repeat 3"
+args = ["--repeat", "3", "--text", "{text}", "--output", "{out}"]
+
+# -- Platforms ----------------------------------------------------------------
+# runner:  a GitHub-hosted runner label (its CPU is recorded in the report).
+# expect:  "works" (default) or "build-fails" (known unsupported: passes when the
+#          build fails, flags it when it starts working).
+# gating:  false reports results without failing the run.
+# tests:   run only these tests (default: all).
+# events:  run only for these triggers (pull_request, push, workflow_dispatch).
+# cmake_args, torch, torch_index: added to or replacing [build] for this target.
+
+[[target]]
+name = "Linux x64"
+runner = "ubuntu-24.04"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
+torch_index = "https://download.pytorch.org/whl/cpu"
+
+[[target]]
+name = "Linux x64 (Clang)"
+runner = "ubuntu-24.04"
+torch_index = "https://download.pytorch.org/whl/cpu"
+cmake_args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
+tests = ["repo_tests", "default", "student_w4", "voice_seed"]
+
+[[target]]
+name = "Linux ARM64"
+runner = "ubuntu-24.04-arm"        # Arm Neoverse, 4 vCPU, 16 GB
+
+[[target]]
+name = "macOS Apple Silicon"
+runner = "macos-15"                # Apple M1, 3 vCPU, 7 GB
+
+[[target]]
+name = "Windows x64"
+runner = "windows-2025"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
+
+[[target]]
+name = "macOS Intel"
+runner = "macos-15-intel"
+gating = false
+reason = "PyTorch's last Intel macOS release is 2.2.2; the decoders are exported with a newer LibTorch."
+
+[[target]]
+name = "Windows ARM64"
+runner = "windows-11-arm"
+expect = "build-fails"
+reason = "PyTorch publishes no Windows ARM64 wheels, so there is no LibTorch to build against."
