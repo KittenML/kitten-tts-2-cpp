@@ -1,6 +1,9 @@
 name: Python wheels
 
 on:
+  push:
+    branches:
+      - py-interface
   workflow_dispatch:
     inputs:
       model_test:
