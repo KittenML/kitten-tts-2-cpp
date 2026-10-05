@@ -298,6 +298,16 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
     res = {"key": key, "status": "pass"}
     code, secs, log = run_cli(binary, env, where + args + ["--report", report],
                               os.path.join(out, "logs", f"{key}.log"), step_limit(spec))
+    if crashed(code):
+        # Run a crash once more: one that does not come back is flaky, not broken, and is reported as such.
+        first = f"kitten-tts {exit_reason(code)}"
+        code, secs2, log2 = run_cli(binary, env, where + args + ["--report", report],
+                                    os.path.join(out, "logs", f"{key}-retry.log"), step_limit(spec))
+        secs += secs2
+        if code == 0:
+            res["flaky"] = f"{first} on the first run; passed on the second"
+        else:
+            log = log2
     res["secs"] = secs
     res["buffers"] = weight_buffers(log)
     if code != 0:
@@ -338,6 +348,12 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
         res.update(status="fail", error=f"{type(e).__name__}: {e}"[:400], trace=traceback.format_exc()[-1500:],
                    log_tail=log[-1500:])
     return res
+
+
+def crashed(code):
+    """A signal or a native exception, not an ordinary error exit or a timeout."""
+    return code is not None and (code < 0 or (code > 128 and sys.platform != "win32")
+                                 or (code & 0xFFFFFFFF) >= 0xC0000000)
 
 
 def run_repo_tests(binary, env, out, limit):

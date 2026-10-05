@@ -256,6 +256,10 @@ def platforms_section(results, slow_minutes):
     if fixed:
         notes.append("**Works now, did not before:** " + "; ".join(
             f"{r['spec']['name']} ({', '.join(title_of(r, k) for k in r['fixed'][:3])})" for r in fixed))
+    flaky = [(r, t) for r in results for t in r.get("tests", []) if t.get("flaky")]
+    if flaky:
+        notes.append(f"**Flaky** (crashed, then passed when run again; does not fail the run): " + "; ".join(
+            f"{r['spec']['name']} - {title_of(r, t['key'])} ({t['flaky']})" for r, t in flaky))
     unclear = [r for r in results if r["masked"]]
     if unclear:
         notes.append("**On a CPU the baseline never drew**, so not counted as broken: "
@@ -286,14 +290,14 @@ def tests_section(results):
             elif ok is None:
                 row.append("-")
             elif ok is True:
-                row.append(mark(r, key, OK))
+                row.append(mark(r, key, OK) + (" flaky" if (test_row(r, key) or {}).get("flaky") else ""))
             else:
                 row.append(mark(r, key, LATE if ok == "timeout" else BAD))
         rows.append(row)
     fail_above = results[0]["spec"].get("asr", {}).get("fail_above", 0)
     return ("### Tests\n\nThe README's examples and the kitten-tts tests, run against this build, one column per "
             f"platform and the CPU it drew. {OK} works, {BAD} does not, **new** = changed since the baseline, "
-            f"{LATE} took too long, - not run there. Whisper must hear the spoken text (WER at most {fail_above:.0%}).\n\n"
+            f"**flaky** = crashed once and passed when run again, {LATE} took too long, - not run there. Whisper must hear the spoken text (WER at most {fail_above:.0%}).\n\n"
             + table(["Test"] + [column(r) for r in results], rows, ["---"] + [":---:"] * len(results)))
 
 

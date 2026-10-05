@@ -237,6 +237,21 @@ class Report(unittest.TestCase):
     def row(self, md, name):
         return next(l for l in md.splitlines() if l.startswith(f"| {name} |"))
 
+    def test_flaky_crash_is_listed_not_failed(self):
+        now = [result(tests=[test(flaky="kitten-tts was killed by signal 11 on the first run; passed on the second"),
+                             test("download", "fail")])]
+        md, code = self.run_report(now, baseline=[result()])
+        self.assertEqual(code, 0)
+        self.assertIn(f"| Speak | {OK} flaky |", md)
+        self.assertIn("**Flaky** (crashed, then passed when run again; does not fail the run): Linux x64 - Speak "
+                      "(kitten-tts was killed by signal 11 on the first run; passed on the second)", md)
+
+    def test_crash_detection(self):
+        self.assertTrue(run_target.crashed(-11))
+        self.assertTrue(run_target.crashed(3221225501))
+        self.assertFalse(run_target.crashed(1))
+        self.assertFalse(run_target.crashed(None))
+
     def test_comment_size_limit(self):
         def job(i, **kw):
             return result(spec(id=f"p{i}", name=f"P{i}"), **kw)
