@@ -1,67 +1,41 @@
-[project]
-name = "llama-cpp-scripts"
-description = "Scripts that ship with llama.cpp"
-keywords = ["ggml", "gguf", "llama.cpp"]
-version = "0.0.0"
-dynamic = ["classifiers"]
-readme = "README.md"
-authors = [{name = "GGML", email = "ggml@ggml.ai"}]
-requires-python = '>=3.10,<3.15'
-dependencies = [
-    'numpy (>=1.26.4,<3.0.0)',
-    'sentencepiece (>=0.1.98,<0.3.0)',
-    'transformers (==4.57.6)',
-    'protobuf (>=4.21.0,<5.0.0)',
-    'torch (>=2.6.0,<3.0.0)',
-    'gguf @ ./gguf-py',
-]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-
-[project.urls]
-homepage = "https://ggml.ai"
-repository = "https://github.com/ggml-org/llama.cpp"
-
-[project.scripts]
-llama-convert-hf-to-gguf = "convert_hf_to_gguf:main"
-llama-convert-lora-to-gguf = "convert_lora_to_gguf:main"
-llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
-llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
-
-[tool.poetry]
-packages = [
-    { include = "*.py", from = "." },
-    { include = "conversion", from = "." },
-]
-
-[tool.poetry.dependencies]
-torch = [
-    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'darwin'" },
-    { version = "==2.11.0+cpu", source = "pytorch", markers = "sys_platform == 'linux'" },
-    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'win32'" },
-]
-
-[tool.poetry.group.dev.dependencies]
-pytest = "~=8.3.3"
-
-# Force wheel + cpu
-# For discussion and context see https://github.com/python-poetry/poetry#6409
-[[tool.poetry.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cpu"
-priority = "explicit"
-
-[tool.uv.sources]
-torch = { index = "pytorch" }
-
-[[tool.uv.index]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=68", "wheel", "cmake>=3.21", "torch==2.13.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.cibuildwheel]
+build = "cp3{10,11,12,13,14}-*"
+skip = ["*-musllinux_*", "*-manylinux_i686", "*-manylinux_ppc64le", "*-manylinux_s390x", "*-manylinux_armv7l", "*-manylinux_riscv64", "*-win32", "*-macosx_x86_64", "*-macosx_universal2", "cp310-win_arm64", "cp314-win_arm64"]
+build-frontend = { name = "pip", args = ["--no-build-isolation"] }
+before-build = "python {project}/packaging/prepare_wheel.py"
+repair-wheel-command = "python {project}/packaging/repair_wheel.py {wheel} {dest_dir}"
+test-command = "python {project}/packaging/smoke_wheel.py"
+test-requires = ["numpy", "soundfile"]
+
+[tool.cibuildwheel.environment]
+KITTEN_PORTABLE = "1"
+CMAKE_BUILD_PARALLEL_LEVEL = "2"
+CMAKE_ARGS = "-DLLAMA_BUILD_LIBRESSL=ON"
+PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+KITTEN_PORTABLE = "1"
+CMAKE_BUILD_PARALLEL_LEVEL = "2"
+CMAKE_ARGS = "-DLLAMA_BUILD_LIBRESSL=ON"
+PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64", "ARM64"]
+
+[[tool.cibuildwheel.overrides]]
+select = "*-win_arm64"
+inherit.environment = "append"
+environment = { CMAKE_ARGS = "-DLLAMA_BUILD_LIBRESSL=ON -T ClangCL -A ARM64" }

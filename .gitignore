@@ -153,3 +153,14 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Python native package
+/dist/
+/*.egg-info/
+/python/*.egg-info/
+/python/kitten_tts_cpp/data/
+/python/kitten_tts_cpp/*.pyd
+
+/wheelhouse/
+/python/kitten_tts_cpp/_build_info.json
+/python/kitten_tts_cpp/licenses/

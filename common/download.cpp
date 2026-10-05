@@ -298,6 +298,9 @@ static int common_download_file_single_online(const std::string & url,
     }
 
     auto [cli, parts] = common_http_client(url);
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (!opts.ca_cert_file.empty()) cli.set_ca_cert_path(opts.ca_cert_file);
+#endif
 
     httplib::Headers headers;
     for (const auto & h : opts.headers) {

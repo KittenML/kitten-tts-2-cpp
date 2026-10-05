@@ -1,0 +1,60 @@
+name: Python wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_test:
+        description: Run real W4 speech synthesis too (requires HF_TOKEN for private models)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            arch: x86_64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+          - platform: macos-arm64
+            runner: macos-14
+            arch: arm64
+          - platform: windows-x86_64
+            runner: windows-2022
+            arch: AMD64
+          - platform: windows-arm64-experimental
+            runner: windows-11-arm
+            arch: ARM64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.KITTEN_SUBMODULE_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install wheel builder
+        run: python -m pip install cibuildwheel==4.3.0
+      - name: Build and test wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          KITTEN_WHEEL_NETWORK_TEST: '1'
+          KITTEN_WHEEL_MODEL_TEST: ${{ inputs.model_test && '1' || '0' }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CIBW_ENVIRONMENT_PASS_LINUX: HF_TOKEN KITTEN_WHEEL_MODEL_TEST KITTEN_WHEEL_NETWORK_TEST
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kitten-tts-cpp-${{ matrix.platform }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error

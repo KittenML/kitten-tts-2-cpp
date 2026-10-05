@@ -1,0 +1,18 @@
+include CMakeLists.txt LICENSE README.md requirements.txt
+recursive-include cmake *
+recursive-include common *
+recursive-include ggml *
+recursive-include include *
+recursive-include src *
+recursive-include tools *
+recursive-include scripts *
+prune tools/ui/node_modules
+recursive-include vendor *
+recursive-include python *.py
+prune vendor/kitten-text-processing/.git
+prune vendor/kitten-text-processing/build
+prune vendor/kitten-text-processing/dist
+prune vendor/kitten-text-processing/.venv
+global-exclude __pycache__ *.py[cod] *.so *.a *.o .git
+
+recursive-include packaging *.py *.md

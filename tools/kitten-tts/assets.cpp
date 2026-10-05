@@ -33,7 +33,8 @@ assets resolve_assets(const std::map<std::string, std::string> & args) {
     fs::path root = local ? fs::path(args.at("--assets")) : fs::path(get("--cache-dir", env("XDG_CACHE_HOME", env("HOME", ".") + "/.cache") + "/kitten-tts")) / repo / cache_revision;
     common_download_opts opts;
     opts.offline = args.count("--offline");
-    opts.bearer_token = env("HF_TOKEN");
+    opts.bearer_token = get("--hf-token", env("HF_TOKEN"));
+    opts.ca_cert_file = get("--ca-file", env("SSL_CERT_FILE"));
     std::string base = env("HF_ENDPOINT", "https://huggingface.co") + "/" + repo + "/resolve/" + revision + "/";
     auto fetch = [&](const std::string & file) {
         check_path(file);
