@@ -131,6 +131,9 @@ runner = "macos-15"                # Apple M1, 3 vCPU, 7 GB
 [[target]]
 name = "Windows x64"
 runner = "windows-2025"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
+# MSVC needs these on top of the README's line (UTF-8 sources in llama-chat.cpp, C++ version
+# reporting, HTTPS for downloads); KittenML/kitten-tts-2-cpp#3 documents them.
+cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESSL=ON"]
 
 [[target]]
 name = "macOS Intel"
