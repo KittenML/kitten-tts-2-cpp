@@ -17,7 +17,19 @@ The speech language model runs through llama.cpp/GGML, text normalization uses t
 
 Requires a C++20 compiler, CMake, and CPU LibTorch. A CPU PyTorch installation can provide LibTorch's headers and libraries. Use the same LibTorch version for export and inference, with compatible torch/torchaudio versions for asset preparation.
 
+Run the commands below from the repository root.
+
+### Linux (Ubuntu/Debian)
+
+OpenSSL development files are required for HTTPS downloads. Create a Python 3.10+ environment for the build dependencies:
+
 ```sh
+sudo apt install build-essential python3-venv libssl-dev curl
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install cmake
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 git submodule update --init vendor/kitten-text-processing
 
 cmake -S . -B build \
@@ -35,11 +47,45 @@ cmake -S . -B build \
 cmake --build build --target kitten-tts -j 8
 ```
 
+### Windows (PowerShell)
+
+Install Git, 64-bit Python 3.12, and Visual Studio 2022 or Build Tools 2022 with the **Desktop development with C++** workload and a Windows SDK.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install cmake torch
+git submodule update --init vendor/kitten-text-processing
+
+$python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+$torchPrefix = & $python -c 'import torch; print(torch.utils.cmake_prefix_path)'
+$torchLib = & $python -c "from pathlib import Path; import torch; print(Path(torch.__file__).parent / 'lib')"
+$env:PATH = "$torchLib;$env:PATH"
+
+.\.venv\Scripts\cmake.exe -S . -B build -G 'Visual Studio 17 2022' -A x64 `
+  -DCMAKE_CXX_STANDARD=20 `
+  -DCMAKE_CXX_STANDARD_REQUIRED=ON `
+  '-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8' `
+  -DGGML_CUDA=OFF -DGGML_METAL=OFF `
+  -DLLAMA_BUILD_KITTEN_TTS=ON `
+  -DLLAMA_BUILD_SERVER=OFF `
+  -DLLAMA_BUILD_TESTS=OFF `
+  -DLLAMA_BUILD_EXAMPLES=OFF `
+  -DLLAMA_BUILD_LIBRESSL=ON `
+  "-DCMAKE_PREFIX_PATH=$torchPrefix" `
+  "-DPython3_EXECUTABLE=$python"
+
+.\.venv\Scripts\cmake.exe --build build --config Release --target kitten-tts -j 8
+```
+
+The MSVC flags enable C++ standard reporting and UTF-8 source encoding. LibreSSL provides HTTPS support. Windows builds use `--config Release` and produce `build/bin/Release/kitten-tts.exe`; keep PyTorch's DLL directory on PATH when running it.
+
 The normalizer prepares its grammar data using Python at build time. To use existing grammar data, configure with `-DKITTEN_DATA_DIR=/path/to/data`.
 
 ## Download and run
 
 The runtime fetches `config.json` from `KittenML/kitten-tts-2` first, then downloads its GGUF, selected TorchScript decoder, and matching voice conditioning. Assets are cached under `$XDG_CACHE_HOME/kitten-tts` (or `~/.cache/kitten-tts`).
+
+If automatic downloads fail, use the [manual download](#manual-download) below.
 
 ```sh
 build/bin/kitten-tts --text 'One day, a little girl named Lily found a needle in her room.' --output hello.wav
@@ -58,7 +104,45 @@ On supported Intel CPUs, the runtime losslessly repacks TQ2_1 weights into the e
 
 See the [detailed guide](tools/kitten-tts/README.md) for FP16 exports, student decoders, reference voice preparation, and the normalizer submodule setup.
 
+### Manual download
+
+Download the prepared native files directly into a local asset folder. No Python export is required.
+
+**Linux**
+
+```sh
+base=https://huggingface.co/KittenML/kitten-tts-2/resolve/main
+decoder=default # or student_w4 / student_w8
+mkdir -p "models/kitten2/cpp/$decoder"
+curl -fL "$base/config.json" -o models/kitten2/config.json
+curl -fL "$base/cpp/model-tq2_1.gguf" -o models/kitten2/cpp/model-tq2_1.gguf
+for file in decoder.pt voices.json; do
+  curl -fL "$base/cpp/$decoder/$file" -o "models/kitten2/cpp/$decoder/$file"
+done
+build/bin/kitten-tts --assets models/kitten2 --decoder "$decoder" --text 'Hello.' --output hello.wav
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$base = 'https://huggingface.co/KittenML/kitten-tts-2/resolve/main'
+$decoder = 'default' # or 'student_w4' / 'student_w8'
+New-Item -ItemType Directory -Force "models/kitten2/cpp/$decoder" | Out-Null
+curl.exe -fL "$base/config.json" -o models/kitten2/config.json
+curl.exe -fL "$base/cpp/model-tq2_1.gguf" -o models/kitten2/cpp/model-tq2_1.gguf
+foreach ($file in 'decoder.pt', 'voices.json') {
+  curl.exe -fL "$base/cpp/$decoder/$file" -o "models/kitten2/cpp/$decoder/$file"
+}
+$torchLib = & .\.venv\Scripts\python.exe -c "from pathlib import Path; import torch; print(Path(torch.__file__).parent / 'lib')"
+$env:PATH = "$torchLib;$env:PATH"
+.\build\bin\Release\kitten-tts.exe --assets models/kitten2 --decoder $decoder --text 'Hello.' --output hello.wav
+```
+
+Keep `--assets models/kitten2` on subsequent synthesis commands when using this fallback.
+
 ## Generate speech
+
+On Windows, use `build/bin/Release/kitten-tts.exe` with PyTorch's DLL directory on PATH. The examples below use POSIX line continuations; in PowerShell, put each command on one line or use backticks.
 
 ```sh
 build/bin/kitten-tts \
