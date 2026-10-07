@@ -45,7 +45,7 @@ def load_results(results_dir, plan):
     out = sorted(results.values(), key=lambda r: (order.get(r["spec"]["id"], 1e9), r["spec"]["id"]))
     for r in out:
         if r.get("missing"):
-            r["status"], r["reasons"] = NO_RESULT, ["the job timed out, was cancelled or crashed before reporting"]
+            r["status"], r["reasons"] = NO_RESULT, ["GitHub did not run the job to the end (no runner, or cancelled)"]
         else:
             r["status"], r["reasons"] = classify(r)
         r["rows"] = {t["key"]: t for t in r.get("tests", [])}
@@ -183,9 +183,7 @@ def compare(results, baseline, limit_s):
         if not b or b["status"] == NO_RESULT:
             continue
         if r["status"] == NO_RESULT:
-            if b["outcomes"].get("build") == "pass":
-                r["broke"].append("build")
-            continue
+            continue            # says nothing about the code: it is listed under Notes
         new_cpu = built(r) and built(b) and cpu_of(r) != cpu_of(b)
         stalled = "timeout" in b["outcomes"].values()
         for key, now in r["outcomes"].items():
@@ -235,12 +233,13 @@ def headline(results, ctx):
 
 def summary_section(results, ctx):
     full = sum(r["status"] == PASSED for r in results)
-    none = sum(not built(r) for r in results)
+    lost = sum(r["status"] == NO_RESULT for r in results)
+    none = sum(not built(r) for r in results) - lost
     spec = results[0]["spec"] if results else {}
     sha = f"`{ctx['sha'][:7]}`, " if ctx.get("sha") else ""
     rows = [["Commit", f"{sha}kitten-tts built from {'this PR' if ctx.get('pr') else 'this commit'}"],
-            ["Platforms", f"{len(results)}: {full} pass every test {DOT} {len(results) - full - none} pass some "
-                          f"{DOT} {none} do not build"],
+            ["Platforms", f"{len(results)}: {full} pass every test {DOT} {len(results) - full - none - lost} pass "
+                          f"some {DOT} {none} do not build" + (f" {DOT} {lost} no result" if lost else "")],
             ["Sample text", f"{len(spec.get('text', ''))} characters, voice {spec.get('voice', '?')}"]]
     if ctx.get("baseline"):
         rows.append(["Compared with", against(ctx)])
@@ -273,7 +272,7 @@ def status_section(results, slow_minutes):
     for r in results:
         b = r.get("build") or {}
         if r["status"] == NO_RESULT:
-            build_cell, tests_cell = new_mark(r, "build", f"{BAD} no result"), NONE
+            build_cell, tests_cell = "no result", NONE
         elif not b.get("ok"):
             build_cell, tests_cell = new_mark(r, "build", f"{BAD} {b.get('stage', 'build')}"), NONE
         else:
@@ -306,8 +305,7 @@ def problems_section(results):
     """One row per reason something does not work, with the platforms it happens on."""
     groups = {}          # why -> {"what": [...], "where": [...]}
     for r in results:
-        keys = ["build"] if r["status"] == NO_RESULT else [
-            k for k, v in r["outcomes"].items() if v in ("fail", "timeout")]
+        keys = [k for k, v in r["outcomes"].items() if v in ("fail", "timeout")]
         for key in keys:
             g = groups.setdefault(why_of(r, key), {"what": [], "where": []})
             if title_of(r, key) not in g["what"]:
@@ -379,6 +377,10 @@ def notes_section(results, slow_minutes):
                if (r.get("asr") or {}).get("status") not in (None, "done")]
     if unheard:
         notes.append("**WER not measured**, the transcription did not finish: " + "; ".join(unheard))
+    lost = [r["spec"]["name"] for r in results if r["status"] == NO_RESULT]
+    if lost:
+        notes.append("**No result**, GitHub did not run the job to the end (no runner, or cancelled), so it says "
+                     f"nothing about this PR: {', '.join(lost)}")
     slow = [r for r in results if (r.get("job_secs") or r.get("secs") or 0) > slow_minutes * 60]
     if slow:
         notes.append(f"{SLOW} **Slow jobs**: " + "; ".join(

@@ -263,11 +263,13 @@ class Report(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("tests on this platform timed out in the baseline too", md)
 
-    def test_missing_job_that_built_on_main_fails(self):
+    def test_a_job_github_never_ran_is_listed_not_failed(self):
         md, code = self.run_report([result()], baseline=[result(), result(spec(id="mac", name="macOS"))],
                                    planned=[spec(), spec(id="mac", name="macOS")])
-        self.assertEqual(code, 1)
-        self.assertIn(f"{BAD} no result new", self.row(md.split("## Platform Status")[1], "macOS"))
+        self.assertEqual(code, 0)
+        self.assertIn("| no result |", self.row(md.split("## Platform Status")[1], "macOS"))
+        self.assertIn("**No result**, GitHub did not run the job to the end (no runner, or cancelled), so it says "
+                      "nothing about this PR: macOS", md)
 
     def test_skipped_tests_never_count(self):
         now = result(tests=[test(status="skipped", error="not run: the job ran out of time"), test("download")])
