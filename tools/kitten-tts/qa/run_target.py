@@ -338,6 +338,9 @@ def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
         if first:
             error += f", {tries} times" if error == first else f" (first run: {first})"
         res.update(status="timeout" if code is None else "fail", error=error[:400], log_tail=log[-2500:])
+        if code is None and timeout_s < step_limit(spec):
+            # Cut short by the job's deadline, not by the step limit: it says nothing either way.
+            res.update(status="skipped", error=f"stopped after {span(timeout_s)}: the job was near its time limit")
         return res
     try:
         with open(report, encoding="utf-8") as f:

@@ -143,8 +143,10 @@ timeout_minutes = 75
 [[target]]
 name = "Windows ARM64"
 runner = "windows-11-arm"          # Arm Cobalt 100, 4 vCPU, 16 GB
-# ggml does not build with MSVC on ARM: docs/build.md builds Windows on ARM with the
-# arm64-windows-llvm preset (clang, Ninja) from a Visual Studio developer prompt.
-cmake_args = ["-G", "Ninja", "-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake", "-DGGML_OPENMP=OFF",
+timeout_minutes = 75
+# ggml does not build with MSVC on ARM ("use clang", docs/build.md), and LibTorch passes
+# MSVC options (/permissive- /EHsc /bigobj) to whatever links it, so this is clang-cl,
+# clang with MSVC's options, with Ninja in a Visual Studio developer environment.
+cmake_args = ["-G", "Ninja", "-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl", "-DGGML_OPENMP=OFF",
               "-DLLAMA_BUILD_LIBRESSL=ON"]
 vs_dev_env = "arm64"
