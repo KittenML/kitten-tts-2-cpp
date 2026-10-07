@@ -13,7 +13,8 @@ import gguf
 
 class TestTQ2(unittest.TestCase):
     def test_lossless_native_layout(self):
-        lib = ctypes.CDLL(str(ROOT / 'build/bin/libggml-base.so'))
+        name = {'darwin': 'libggml-base.dylib', 'win32': 'ggml-base.dll'}.get(sys.platform, 'libggml-base.so')
+        lib = ctypes.CDLL(str(next((ROOT / 'build/bin').rglob(name))))
         quantize = lib.quantize_row_tq2_1_ref
         dequantize = lib.dequantize_row_tq2_1
         for fn in (quantize, dequantize):

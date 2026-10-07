@@ -1,0 +1,152 @@
+# What the kitten-tts QA workflow tests. Edit this file, not the workflow.
+#
+# Each target builds kitten-tts on one GitHub-hosted runner with the README's
+# commands, runs the README's examples, and reports to the pull request.
+
+[sample]
+text = "Kitten TTS runs fully on your device and creates clear speech quickly. This benchmark compares every model for speed, quality, and consistency."
+voice = "Bruno"
+
+[asr]
+# Each runner transcribes its own audio to measure word error rate.
+enabled = true
+model = "openai/whisper-small.en"
+fail_above = 0.50   # WER above this means the audio does not say the text
+
+[limits]
+step_minutes = 10   # one install, configure, build, model download, test or transcription; stopped and reported past this
+job_minutes = 45    # a whole platform job (GitHub cancels it after this); a target can set timeout_minutes
+
+[report]
+slow_job_minutes = 30
+
+[build]
+# The README's configure line. A target can add cmake_args.
+cmake_args = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DCMAKE_CXX_STANDARD=20",
+  "-DCMAKE_CXX_STANDARD_REQUIRED=ON",
+  "-DGGML_CUDA=OFF",
+  "-DGGML_METAL=OFF",
+  "-DLLAMA_BUILD_KITTEN_TTS=ON",
+  "-DLLAMA_BUILD_SERVER=OFF",
+  "-DLLAMA_BUILD_TESTS=OFF",
+  "-DLLAMA_BUILD_EXAMPLES=OFF",
+]
+python = "3.12"     # builds the normalizer data; its torch provides CPU LibTorch
+torch = "torch"     # pip requirement for LibTorch
+# The README asks for a CPU PyTorch. PyTorch's CPU index has one for every runner here;
+# PyPI's Linux torch is a CUDA build and PyPI has none for Windows ARM64.
+torch_index = "https://download.pytorch.org/whl/cpu"
+
+# -- Tests --------------------------------------------------------------------
+# The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in;
+# {threads} is the runner's core count. "default" and "download" run exactly as the
+# README shows them, so kitten-tts's own thread default (8) is tested there.
+#   assets = "local"  the model repo's files, with the cpp manifest added locally (default)
+#   assets = "hub"    the README's download path, exactly as users run it
+#   wer = true        Whisper must hear the spoken text (wer_text if markup is spoken)
+#   audio = false     no WAV is expected (--tokens-only)
+#   repeat_same       run twice; the two outputs must be identical
+#   kind = "repo"     the repository's own tests in tools/kitten-tts
+
+[tests.repo_tests]
+title = "Repo tests: test_assets.py, test_tq2.py"
+kind = "repo"
+
+[tests.download]
+title = "README quick start: kitten-tts downloads the model itself"
+assets = "hub"
+args = ["--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.default]
+title = "Speak the sample text, README defaults (8 threads)"
+args = ["--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.student_w4]
+title = "Speak with --decoder student_w4"
+args = ["--decoder", "student_w4", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.student_w8]
+title = "Speak with --decoder student_w8"
+args = ["--decoder", "student_w8", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.voice_seed]
+title = "--voice Bruno --seed 1234 gives the same audio twice"
+args = ["--text", "Hello there. This is Kitten T T S running on the CPU.", "--voice", "Bruno", "--threads", "{threads}", "--seed", "1234", "--output", "{out}"]
+wer = true
+wer_text = "Hello there. This is Kitten TTS running on the CPU."
+repeat_same = true
+
+[tests.expressive]
+title = "Expression tags with --preset expressive"
+args = ["--text", "[joyful] We won the grant <laugh> I can (((hardly))) believe it!", "--voice", "Kiki", "--preset", "expressive", "--threads", "{threads}", "--output", "{out}"]
+
+[tests.no_repack]
+title = "--no-repack (compact TQ2_1 kernels)"
+args = ["--no-repack", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
+wer = true
+
+[tests.tokens_only]
+title = "--tokens-only (no waveform decoder)"
+args = ["--tokens-only", "--threads", "{threads}", "--text", "{text}"]
+audio = false
+
+[tests.benchmark]
+title = "Benchmark: --repeat 3"
+args = ["--repeat", "3", "--threads", "{threads}", "--text", "{text}", "--output", "{out}"]
+
+# -- Platforms ----------------------------------------------------------------
+# runner:  a GitHub-hosted runner label (its CPU is recorded in the report).
+# Nothing here says what should work: the report shows what does, and a pull
+# request fails only when something that works on main stops working.
+# tests:   run only these tests (default: all).
+# events:  run only for these triggers (pull_request, push, workflow_dispatch).
+# cmake_args, torch, torch_index: added to or replacing [build] for this target.
+# vs_dev_env: build in a Visual Studio developer environment for this arch (Windows).
+
+[[target]]
+name = "Linux x64"
+runner = "ubuntu-24.04"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
+
+[[target]]
+name = "Linux x64 (Clang)"
+runner = "ubuntu-24.04"
+cmake_args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
+tests = ["repo_tests", "default", "student_w4", "voice_seed"]
+
+[[target]]
+name = "Linux ARM64"
+runner = "ubuntu-24.04-arm"        # Arm Neoverse, 4 vCPU, 16 GB
+
+[[target]]
+name = "macOS Apple Silicon"
+runner = "macos-15"                # Apple M1, 3 vCPU, 7 GB
+timeout_minutes = 75               # the README's 8-thread commands use their full 10 min here
+
+[[target]]
+name = "Windows x64"
+runner = "windows-2025"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
+# MSVC needs these on top of the README's line (UTF-8 sources in llama-chat.cpp, C++ version
+# reporting, HTTPS for downloads); KittenML/kitten-tts-2-cpp#3 documents them.
+cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESSL=ON"]
+
+[[target]]
+name = "macOS Intel"
+runner = "macos-15-intel"          # Intel Core i7, 4 vCPU, 14 GB
+timeout_minutes = 75
+
+[[target]]
+name = "Windows ARM64"
+runner = "windows-11-arm"          # Arm Cobalt 100, 4 vCPU, 16 GB
+timeout_minutes = 75
+# ggml does not build with MSVC on ARM ("use clang", docs/build.md), and LibTorch passes
+# MSVC options (/permissive- /EHsc /bigobj) to whatever links it, so this is clang-cl,
+# clang with MSVC's options, with Ninja in a Visual Studio developer environment.
+cmake_args = ["-G", "Ninja", "-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl", "-DGGML_OPENMP=OFF",
+              "-DLLAMA_BUILD_LIBRESSL=ON"]
+vs_dev_env = "arm64"

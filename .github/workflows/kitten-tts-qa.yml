@@ -1,0 +1,236 @@
+name: kitten-tts QA
+
+# Builds kitten-tts with the README's commands on every runner in
+# tools/kitten-tts/qa/config.toml, runs the README's examples, and posts one
+# report to the pull request. To change what is tested, edit the config.
+
+on:
+  pull_request:
+    paths:
+      - "tools/kitten-tts/**"
+      - "src/**"
+      - "ggml/**"
+      - "common/**"
+      - "include/**"
+      - "vendor/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/kitten-tts-qa*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/kitten-tts/**"
+      - "src/**"
+      - "ggml/**"
+      - "common/**"
+      - "include/**"
+      - "vendor/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/kitten-tts-qa*.yml"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Only platforms whose name or runner contains one of these, comma-separated (e.g. 'Linux, macos'). Empty runs all."
+        default: ""
+      tests:
+        description: "Only these tests from config.toml, comma-separated (e.g. 'default,benchmark'). Empty runs all."
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitten-tts-qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test the QA scripts
+        run: |
+          python -m pip install -q numpy
+          python -m unittest discover -s tools/kitten-tts/qa/tests -v
+
+      - name: Expand config.toml into jobs
+        id: plan
+        env:
+          QA_TARGETS: ${{ inputs.targets }}
+          QA_TESTS: ${{ inputs.tests }}
+        run: python tools/kitten-tts/qa/plan.py --out plan.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-plan
+          path: plan.json
+
+  platform:
+    name: ${{ matrix.name }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PYTHONUTF8: "1"
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build and test
+        shell: bash
+        env:
+          QA_SPEC: ${{ matrix.spec }}
+        run: |
+          printf '%s' "$QA_SPEC" > "$RUNNER_TEMP/spec.json"
+          python tools/kitten-tts/qa/run_target.py --spec "$RUNNER_TEMP/spec.json" --out qa-out --work "$RUNNER_TEMP/kitten-qa"
+
+      - name: Upload audio
+        id: audio
+        if: always() && hashFiles('qa-out/audio/*.wav') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-audio-${{ matrix.id }}
+          path: qa-out/audio/
+          retention-days: 14
+
+      - name: Link the audio from the result
+        if: always() && steps.audio.outputs.artifact-url != '' && hashFiles('qa-out/result.json') != ''
+        shell: bash
+        env:
+          AUDIO_URL: ${{ steps.audio.outputs.artifact-url }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          path = "qa-out/result.json"
+          with open(path, encoding="utf-8") as f:
+              result = json.load(f)
+          result["audio_url"] = os.environ["AUDIO_URL"]
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(result, f, indent=1)
+          EOF
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-result-${{ matrix.id }}
+          path: |
+            qa-out/result.json
+            qa-out/build.log
+            qa-out/logs/
+            qa-out/reports/
+          if-no-files-found: ignore
+
+  report:
+    name: Report
+    needs: [plan, platform]
+    # Not always(): a run cancelled by a newer push must not post "no result" for every job.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read          # job log links and times for the report
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qa-result-*
+          path: results
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qa-plan
+          path: plan
+
+      # A pull request fails only if something that works there stops working here:
+      # the latest finished run on the base branch (main), else this branch's last run.
+      - name: Find the run to compare with
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.base_ref || github.ref_name }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          # Finished runs on a branch, newest first, cancelled ones last (a newer push cancels a
+          # run, often before most jobs report); not manual runs, which may cover only some
+          # platforms. One that stopped before any job reported has nothing to compare with,
+          # so try the next.
+          runs() {
+            gh run list -R "$GITHUB_REPOSITORY" --workflow kitten-tts-qa.yml --branch "$1" --limit 30 \
+              --json databaseId,status,conclusion,event \
+              --jq "[.[] | select(.status == \"completed\" and .conclusion != \"skipped\" and .event != \"workflow_dispatch\" and .databaseId != $GITHUB_RUN_ID)] | sort_by(.conclusion == \"cancelled\") | .[].databaseId"
+          }
+          mkdir -p baseline
+          for branch in "$BASE" "$HEAD"; do
+            [ -n "$branch" ] || continue
+            for id in $(runs "$branch" | head -5); do
+              if gh run download "$id" -R "$GITHUB_REPOSITORY" -p 'qa-result-*' -D baseline 2>/dev/null \
+                  && [ -n "$(find baseline -name result.json | head -1)" ]; then
+                label="$branch"; [ "$branch" = "$BASE" ] || label="this branch's previous run"
+                printf '{"run_id": %s, "label": "%s"}' "$id" "$label" > baseline/about.json
+                echo "Comparing with run $id ($label)"
+                break 2
+              fi
+              rm -rf baseline && mkdir -p baseline
+            done
+          done
+          [ -f baseline/about.json ] || echo "Nothing to compare with yet."
+
+      - name: Build report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --paginate \
+            --jq '.jobs[] | {name, html_url, started_at, completed_at}' | jq -s . > jobs.json
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          python tools/kitten-tts/qa/report.py results report --plan plan/plan.json --jobs jobs.json --run-started "$started" \
+            --baseline baseline
+          cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record the pull request for the fork commenter
+        if: github.event_name == 'pull_request'
+        run: echo "${{ github.event.pull_request.number }}" > report/pr-number.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: report/
+
+      # Pull requests from forks get a read-only token; kitten-tts-qa-comment.yml posts their report instead.
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          python tools/kitten-tts/qa/pr_comment.py --repo "${{ github.repository }}"
+          --pr "${{ github.event.pull_request.number }}"
+          --sha "${{ github.event.pull_request.head.sha }}"
+          --body report/pr-comment.md
+
+      - name: Fail on platform failures
+        run: python tools/kitten-tts/qa/report.py --gate report/summary.json
