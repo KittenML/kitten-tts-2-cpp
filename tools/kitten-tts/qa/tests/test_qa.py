@@ -146,6 +146,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(specs[0]["build"]["cmake_args"], ["-DA=1", "-DB=2"])
         self.assertEqual(specs[0]["limits"], {"step_minutes": 10, "job_minutes": 45})
         self.assertEqual(specs[0]["build"]["torch_index"], "")
+        self.assertEqual(specs[0]["build"]["vs_dev_env"], "")
         specs = self.expand(path, GITHUB_EVENT_NAME="push", QA_TESTS="default")
         self.assertEqual([[t["key"] for t in s["tests"]] for s in specs], [["default"], ["default"]])
 
@@ -199,8 +200,7 @@ class Report(unittest.TestCase):
         self.assertIn(f"{OK} **Report only**: there is no earlier run to compare with yet.", md)
         for heading in ("## Summary", "## Platform Status", "## What Does Not Work", "## Tests"):
             self.assertIn(heading, md)
-        self.assertIn(f"| Linux x64 | AMD EPYC 7763<br>4 cores, 16 GB, AVX2 | {OK} 4 min | {BAD} 1/2 | 0.90 | "
-                      "0.90 default | 0% |", md)
+        self.assertIn(f"| Linux x64 | AMD EPYC 7763<br>4 cores, 16 GB, AVX2 | {OK} 4 min | {BAD} 1/2 | 0.90 | 0% |", md)
         self.assertIn("| Test | Linux x64<br>AMD EPYC 7763 |", md)
         self.assertIn(f"| Speak | {OK} |", md)
         self.assertIn(f"| Download | {BAD} |", md)
@@ -281,6 +281,17 @@ class Report(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(f"| Speak | {OK} flaky |", md)
         self.assertIn(f"**Flaky**, crashed and then passed when run again: Linux x64: Speak ({flaky})", md)
+
+    def test_a_crash_that_was_flaky_in_the_baseline_is_not_counted(self):
+        crash = result(tests=[test(status="fail", error="crashed: segmentation fault (SIGSEGV), 3 times"),
+                              test("download")])
+        flaky = result(tests=[test(flaky="crashed: segmentation fault (SIGSEGV) the first time; passed when run "
+                                         "again"), test("download")])
+        md, code = self.run_report([crash], baseline=[flaky])
+        self.assertEqual(code, 0)
+        self.assertIn("Linux x64: Speak crashed; it crashed in the baseline too, then passed when run again", md)
+        md, code = self.run_report([crash], baseline=[result(tests=[test(), test("download")])])
+        self.assertEqual(code, 1)                                  # it never crashed in the baseline
 
     def test_crash_detection(self):
         self.assertTrue(run_target.crashed(-11))

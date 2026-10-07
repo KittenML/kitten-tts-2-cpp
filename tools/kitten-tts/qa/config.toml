@@ -55,7 +55,7 @@ title = "Repo tests: test_assets.py, test_tq2.py"
 kind = "repo"
 
 [tests.download]
-title = "Download from Hugging Face and speak (README)"
+title = "README quick start: kitten-tts downloads the model itself"
 assets = "hub"
 args = ["--text", "{text}", "--output", "{out}"]
 wer = true
@@ -107,6 +107,7 @@ args = ["--repeat", "3", "--threads", "{threads}", "--text", "{text}", "--output
 # tests:   run only these tests (default: all).
 # events:  run only for these triggers (pull_request, push, workflow_dispatch).
 # cmake_args, torch, torch_index: added to or replacing [build] for this target.
+# vs_dev_env: build in a Visual Studio developer environment for this arch (Windows).
 
 [[target]]
 name = "Linux x64"
@@ -140,4 +141,8 @@ runner = "macos-15-intel"          # Intel Core i7, 4 vCPU, 14 GB
 [[target]]
 name = "Windows ARM64"
 runner = "windows-11-arm"          # Arm Cobalt 100, 4 vCPU, 16 GB
-cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESSL=ON"]   # MSVC, as on Windows x64
+# ggml does not build with MSVC on ARM: docs/build.md builds Windows on ARM with the
+# arm64-windows-llvm preset (clang, Ninja) from a Visual Studio developer prompt.
+cmake_args = ["-G", "Ninja", "-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake", "-DGGML_OPENMP=OFF",
+              "-DLLAMA_BUILD_LIBRESSL=ON"]
+vs_dev_env = "arm64"

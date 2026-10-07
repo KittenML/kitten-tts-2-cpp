@@ -172,6 +172,7 @@ def compare(results, baseline, limit_s):
     - a failure on a CPU the baseline never drew, which cannot tell a regression
       from a problem with that CPU (GitHub assigns runner CPUs at random); the
       build does not depend on the CPU, so it always counts;
+    - a crash of a test that also crashed in the baseline and passed when run again;
     - a timeout on a platform where the baseline had timeouts too, or where the
       baseline took over half the limit for that test: a slow runner, not a slowdown.
     """
@@ -198,8 +199,11 @@ def compare(results, baseline, limit_s):
             if before != "pass":
                 continue
             took = (b["rows"].get(key) or {}).get("secs")
+            crash = ((r["rows"].get(key) or {}).get("error") or "").startswith("crashed:")
             if key != "build" and new_cpu:
                 r["excused"].append((key, f"on {cpu_of(r)}, which the baseline never drew"))
+            elif crash and (b["rows"].get(key) or {}).get("flaky"):
+                r["excused"].append((key, "crashed; it crashed in the baseline too, then passed when run again"))
             elif now == "timeout" and stalled:
                 r["excused"].append((key, "timed out; tests on this platform timed out in the baseline too"))
             elif now == "timeout" and took and took >= limit_s / 2:
@@ -281,7 +285,6 @@ def status_section(results, slow_minutes):
         sample = {t["key"] for t in r["spec"].get("tests", []) if "{text}" in " ".join(t.get("args", []))}
         rtfs = {k: t["rtf"] for k, t in r["rows"].items()
                 if k in sample and t.get("rtf") and r["outcomes"].get(k) == "pass"}
-        worst = max(rtfs, key=rtfs.get) if rtfs else None
         wers = [t["wer"] for t in r.get("tests", []) if t.get("wer") is not None]
         secs = r.get("job_secs") or r.get("secs")
         took = minutes(secs) if secs else NONE
@@ -289,14 +292,13 @@ def status_section(results, slow_minutes):
             took = f"{SLOW} {took}"
         rows.append([r["spec"]["name"], cpu_label(r), build_cell, tests_cell,
                      rtf_text(statistics.mean(rtfs.values())) if rtfs else NONE,
-                     f"{rtf_text(rtfs[worst])} {worst}" if worst else NONE,
                      pct(statistics.mean(wers)) if wers else NONE, took])
-    legend = (f"RTF: (LM + decoder time) {chr(247)} audio length as kitten-tts reports it, over the tests that "
-              f"speak the sample text; {SLOW} slower than realtime, or a job over {slow_minutes} min. "
-              "**new**: changed in this PR.")
+    legend = (f"RTF: (LM + decoder time) {chr(247)} audio length as kitten-tts reports it, averaged over the tests "
+              f"that speak the sample text (each test's own is in the run summary); {SLOW} slower than realtime, or "
+              f"a job over {slow_minutes} min. **new**: changed in this PR.")
     return ("## Platform Status\n\n"
-            + table(["Platform", "CPU", "Build", "Tests", "Avg RTF", "Worst RTF", "WER", "Runtime"], rows,
-                    ["---", "---", "---", ":---:", "---:", "---:", "---:", "---:"])
+            + table(["Platform", "CPU", "Build", "Tests", "RTF", "WER", "Runtime"], rows,
+                    ["---", "---", "---", ":---:", "---:", "---:", "---:"])
             + f"\n\n{legend}")
 
 
@@ -389,7 +391,7 @@ def footer(results, ctx):
     asr, limit = spec.get("asr", {}), spec.get("limits", {}).get("step_minutes", 10)
     where = f"the [run summary]({ctx['run_url']})" if ctx.get("run_url") else "the run summary"
     lines = (f"Each setup, build, model download, test and transcription is stopped after {limit} min; a test that "
-             f"crashes is run once more. Every job's numbers, transcripts, logs and audio are in {where}.")
+             f"crashes is run up to twice more. Every job's numbers, transcripts, logs and audio are in {where}.")
     about = [f"Sample text: \"{spec.get('text', '')}\" (voice {spec.get('voice', '?')})",
              "Model files: KittenML/kitten-tts-2 cpp/, with the cpp manifest added locally; the Download test "
              "uses the README's download path as is."]

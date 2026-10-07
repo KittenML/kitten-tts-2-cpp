@@ -19,7 +19,7 @@ import tomllib
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_KEYS = {"title", "kind", "args", "assets", "wer", "wer_text", "audio", "repeat_same"}
 TARGET_KEYS = {"name", "runner", "tests", "events", "cmake_args", "torch", "torch_index", "python",
-               "timeout_minutes"}
+               "timeout_minutes", "vs_dev_env"}
 EVENTS = {"pull_request", "push", "workflow_dispatch"}
 PLACEHOLDERS = {"text", "voice", "threads", "out"}
 
@@ -105,6 +105,7 @@ def expand(cfg):
                 "python": t.get("python", build.get("python", "3.12")),
                 "torch": t.get("torch", build.get("torch", "torch")),
                 "torch_index": t.get("torch_index", build.get("torch_index", "")),
+                "vs_dev_env": t.get("vs_dev_env", ""),
             },
             "text": cfg["sample"]["text"],
             "voice": cfg["sample"]["voice"],

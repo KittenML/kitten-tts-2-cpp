@@ -112,6 +112,20 @@ def step(cmd, log_path, timeout, cwd=None, env=None):
     return code == 0, round(time.time() - t0, 1), tail
 
 
+def vs_dev_env(arch):
+    """The environment of a Visual Studio developer prompt for `arch`, which docs/build.md asks for on Windows ARM."""
+    vswhere = os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe")
+    vs = _run([vswhere, "-latest", "-products", "*", "-property", "installationPath"])
+    bat = os.path.join(vs, "VC", "Auxiliary", "Build", "vcvarsall.bat")
+    out = subprocess.run(f'cmd /s /c ""{bat}" {arch} >nul && set"', capture_output=True, text=True, shell=True).stdout
+    env = dict(os.environ)
+    for line in out.splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k:
+            env[k] = v
+    return env
+
+
 def setup_and_build(spec, out):
     """Install torch (LibTorch) and the QA tools, then configure and build kitten-tts as the README does."""
     b = spec["build"]
@@ -124,6 +138,7 @@ def setup_and_build(spec, out):
     torch_cmd = pip + [b["torch"]] + (["--index-url", b["torch_index"]] if b["torch_index"] else [])
     ok, _, tail = step(torch_cmd, log, limit)
     extra = ["numpy", "huggingface_hub", "cmake"] + (["transformers"] if spec["asr"].get("enabled") else [])
+    extra += ["ninja"] if "Ninja" in b["cmake_args"] else []
     if ok:
         ok, _, tail = step(pip + extra, log, limit)
     res["setup_secs"] = round(time.time() - t0, 1)
@@ -138,11 +153,12 @@ def setup_and_build(spec, out):
     build_dir = os.path.join(ROOT, "build")
     configure = [cmake, "-S", ROOT, "-B", build_dir] + b["cmake_args"] + [
         f"-DCMAKE_PREFIX_PATH={prefix}", f"-DPython3_EXECUTABLE={sys.executable}"]
-    ok, secs_c, tail = step(configure, log, limit, cwd=ROOT)
+    env = vs_dev_env(b["vs_dev_env"]) if b.get("vs_dev_env") else None
+    ok, secs_c, tail = step(configure, log, limit, cwd=ROOT, env=env)
     if ok:
         jobs = str(os.cpu_count() or 2)
         ok, secs_b, tail = step([cmake, "--build", build_dir, "--target", "kitten-tts", "--config", "Release",
-                                 "--parallel", jobs], log, limit, cwd=ROOT)
+                                 "--parallel", jobs], log, limit, cwd=ROOT, env=env)
         res["build_secs"] = round(secs_c + secs_b, 1)
     if not ok:
         res.update(error=last_error(read_log(log)), log_tail=tail)
@@ -299,17 +315,16 @@ def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
     res = {"key": key, "status": "pass"}
     code, secs, log = run_cli(binary, env, where + args + ["--report", report],
                               os.path.join(out, "logs", f"{key}.log"), timeout_s)
-    first = None
-    if crashed(code):
-        # Run a crash once more: one that passes then is flaky, not broken, and is reported as such.
-        first = crash_reason(code)
-        code, secs2, log2 = run_cli(binary, env, where + args + ["--report", report],
-                                    os.path.join(out, "logs", f"{key}-retry.log"), timeout_s)
-        secs += secs2
+    first, tries = None, 1
+    while crashed(code) and tries < 3:
+        # A crash gets two more tries: one that passes then is flaky, not broken, and is reported as such.
+        first = first or crash_reason(code)
+        tries += 1
+        code, more, log = run_cli(binary, env, where + args + ["--report", report],
+                                  os.path.join(out, "logs", f"{key}-try{tries}.log"), timeout_s)
+        secs += more
         if code == 0:
-            res["flaky"] = f"{first} the first time; passed when run again"
-        else:
-            log = log2
+            res["flaky"] = f"{first} {'the first time' if tries == 2 else 'twice'}; passed when run again"
     res["secs"] = secs
     res["buffers"] = weight_buffers(log)
     if code != 0:
@@ -317,7 +332,7 @@ def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
         error = (f"took longer than {span(timeout_s)}" if code is None else
                  crash_reason(code, said[-1] if said else ""))
         if first:
-            error += ", twice" if error == first else f" (first run: {first})"
+            error += f", {tries} times" if error == first else f" (first run: {first})"
         res.update(status="timeout" if code is None else "fail", error=error[:400], log_tail=log[-2500:])
         return res
     try:

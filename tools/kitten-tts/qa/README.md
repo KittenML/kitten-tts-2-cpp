@@ -15,8 +15,10 @@ It assumes nothing about what should work. It answers two questions:
   to compare with, only reports.
 
 Not counted as broken, but listed: a test failure on a CPU the `main` run never drew
-(runner CPUs are assigned at random), and a timeout on a platform that also timed out on
-`main` or where `main` took over half the limit.
+(runner CPUs are assigned at random), a crash of a test that also crashed on `main` and
+passed when run again, and a timeout on a platform that also timed out on `main` or where
+`main` took over half the limit. A test that crashes is run up to twice more; one that
+passes then is reported as flaky.
 
 It runs on pull requests and pushes to `main` that touch kitten-tts, GGML, llama, the
 normalizer or the build. You can also start it from the Actions tab. Every install,
@@ -65,6 +67,7 @@ Edit [`config.toml`](config.toml). The workflow needs no changes.
 | Run some tests on one platform only | `tests = [...]` on the target |
 | Run a platform only on PRs or only on `main` | `events = [...]` |
 | Change the CMake line or LibTorch | `[build]`, or the same keys on a target |
+| Build in a Visual Studio developer environment | `vs_dev_env = "arm64"` (or `"x64"`) on a target |
 | Change the spoken text, WER limit or ASR model | `[sample]`, `[asr]` |
 | Change the time limits | `[limits]`, or `timeout_minutes` on a target |
 
