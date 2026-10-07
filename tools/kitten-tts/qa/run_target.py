@@ -23,7 +23,7 @@ import traceback
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, HERE)
-from common import STATUS_LABEL, classify, exit_reason, wer  # noqa: E402
+from common import STATUS_LABEL, classify, crash_reason, exit_reason, wer  # noqa: E402
 
 HF_REPO = "KittenML/kitten-tts-2"
 DECODERS = ("default", "student_w4", "student_w8")
@@ -92,6 +92,7 @@ def step_limit(spec):
 
 
 def span(secs):
+    secs = int(secs)
     return f"{secs // 60} min" if secs >= 60 else f"{secs} s"
 
 
@@ -284,7 +285,7 @@ def weight_buffers(log_text):
     return sorted(set(re.findall(r"load_tensors:\s+(\S+) model buffer size", log_text)))
 
 
-def run_cli_test(test, spec, binary, env, assets, out, work):
+def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
     key = test["key"]
     wav = os.path.join(out, "audio", f"{key}.wav")
     report = os.path.join(out, "reports", f"{key}.json")
@@ -297,23 +298,26 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
              ["--cache-dir", os.path.join(work, "hub-cache")])
     res = {"key": key, "status": "pass"}
     code, secs, log = run_cli(binary, env, where + args + ["--report", report],
-                              os.path.join(out, "logs", f"{key}.log"), step_limit(spec))
+                              os.path.join(out, "logs", f"{key}.log"), timeout_s)
+    first = None
     if crashed(code):
-        # Run a crash once more: one that does not come back is flaky, not broken, and is reported as such.
-        first = f"kitten-tts {exit_reason(code)}"
+        # Run a crash once more: one that passes then is flaky, not broken, and is reported as such.
+        first = crash_reason(code)
         code, secs2, log2 = run_cli(binary, env, where + args + ["--report", report],
-                                    os.path.join(out, "logs", f"{key}-retry.log"), step_limit(spec))
+                                    os.path.join(out, "logs", f"{key}-retry.log"), timeout_s)
         secs += secs2
         if code == 0:
-            res["flaky"] = f"{first} on the first run; passed on the second"
+            res["flaky"] = f"{first} the first time; passed when run again"
         else:
             log = log2
     res["secs"] = secs
     res["buffers"] = weight_buffers(log)
     if code != 0:
         said = re.findall(r"^kitten-tts: (.+)$", log, re.M)
-        error = (f"took longer than {span(step_limit(spec))}, stopped" if code is None else
-                 f"kitten-tts {exit_reason(code)}" + (f": {said[-1]}" if said else ""))
+        error = (f"took longer than {span(timeout_s)}" if code is None else
+                 crash_reason(code, said[-1] if said else ""))
+        if first:
+            error += ", twice" if error == first else f" (first run: {first})"
         res.update(status="timeout" if code is None else "fail", error=error[:400], log_tail=log[-2500:])
         return res
     try:
@@ -334,7 +338,7 @@ def run_cli_test(test, spec, binary, env, assets, out, work):
         if test["repeat_same"]:
             again_wav, again_rep = wav[:-4] + "-again.wav", report[:-5] + "-again.json"
             code2, _, log2 = run_cli(binary, env, where + [again_wav if a == wav else a for a in args] + [
-                "--report", again_rep], os.path.join(out, "logs", f"{key}-again.log"), step_limit(spec))
+                "--report", again_rep], os.path.join(out, "logs", f"{key}-again.log"), timeout_s)
             assert code2 == 0, f"second run {exit_reason(code2)}"
             with open(again_rep, encoding="utf-8") as f:
                 rep2 = json.load(f)
@@ -400,13 +404,13 @@ def child_asr(spec, out):
         json.dump(rows, f, indent=1)
 
 
-def run_asr(spec, out, refs):
+def run_asr(spec, out, refs, timeout_s):
     with open(os.path.join(out, "asr-refs.json"), "w", encoding="utf-8") as f:
         json.dump(refs, f)
     log_path = os.path.join(out, "logs", "asr.log")
     ok, secs, tail = step([sys.executable, "-X", "faulthandler", os.path.abspath(__file__), "--spec",
                            os.path.join(out, "spec.json"), "--out", out, "--child", "asr"], log_path,
-                          (2 + len(refs)) * step_limit(spec))
+                          timeout_s)
     path = os.path.join(out, "asr.json")
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -437,17 +441,23 @@ def drive(spec_path, out, work):
         if any(t["kind"] == "cli" and t["assets"] == "local" for t in spec["tests"]):
             assets = result["assets"] = download_assets(spec, out, work)
         result["tests"], refs = [], []
+        # Stop starting tests before GitHub cancels the job, so result.json is always written.
+        deadline = t_start + spec["limits"].get("job_minutes", 45) * 60 - 240
+        reserve = step_limit(spec) // 2 if spec["asr"].get("enabled") else 0
         for test in spec["tests"]:
-            if test["kind"] == "repo":
-                row = run_repo_tests(binary, env, out, step_limit(spec))
+            left = deadline - time.time() - reserve
+            if left < 60:
+                row = {"key": test["key"], "status": "skipped", "error": "not run: the job ran out of time"}
+            elif test["kind"] == "repo":
+                row = run_repo_tests(binary, env, out, min(step_limit(spec), left))
             else:
-                row = run_cli_test(test, spec, binary, env, assets, out, work)
+                row = run_cli_test(test, spec, binary, env, assets, out, work, min(step_limit(spec), int(left)))
             print(f"  {test['key']}: {row['status']} ({row.get('secs')}s) {row.get('error', '')}", flush=True)
             result["tests"].append(row)
             if test.get("wer") and row.get("wav") and row.get("wer_text"):
                 refs.append({"key": test["key"], "wav": row["wav"], "text": row["wer_text"]})
         if spec["asr"].get("enabled") and refs:
-            result["asr"] = run_asr(spec, out, refs)
+            result["asr"] = run_asr(spec, out, refs, min(step_limit(spec), max(deadline - time.time(), 60)))
             for row in result["asr"].get("rows", []):
                 test = next(t for t in result["tests"] if t["key"] == row["key"])
                 test["wer"], test["transcript"] = row.get("wer"), row.get("transcript")

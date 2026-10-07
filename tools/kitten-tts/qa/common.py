@@ -9,6 +9,22 @@ NO_RESULT = "no-result"       # the job died, timed out or was cancelled
 STATUS_LABEL = {PASSED: "Works", FAILED: "Does not work", NO_RESULT: "No result"}
 
 
+def wer_failed(row, fail_above):
+    return fail_above is not None and row.get("wer") is not None and row["wer"] > fail_above
+
+
+def test_ok(row, fail_above):
+    """A test works when it ran without error and, where Whisper listened, it heard the text."""
+    return row.get("status") == "pass" and not wer_failed(row, fail_above)
+
+
+def why(row, fail_above):
+    """One line on why a test does not work."""
+    if row.get("status") == "pass" and wer_failed(row, fail_above):
+        return f"Whisper heard \"{(row.get('transcript') or '').strip()[:100]}\" (WER {row['wer']:.0%})"
+    return re.sub(r"\s+", " ", row.get("error") or row.get("status") or "failed").strip()[:220]
+
+
 def classify(result):
     """(status, reasons) for one platform job. Whether a failure is new is decided in the report."""
     build = result.get("build") or {}
@@ -17,15 +33,7 @@ def classify(result):
     if not build.get("ok"):
         return FAILED, [f"{build.get('stage', 'build')}: {build.get('error') or 'failed'}"]
     fail_above = result["spec"].get("asr", {}).get("fail_above")
-    reasons = []
-    for t in result.get("tests", []):
-        if t["status"] != "pass":
-            reasons.append(f"{t['key']}: {t.get('error') or t['status']}")
-        elif fail_above is not None and t.get("wer") is not None and t["wer"] > fail_above:
-            reasons.append(f"{t['key']}: WER {t['wer']:.0%} is above {fail_above:.0%}")
-    asr = result.get("asr") or {}
-    if asr.get("status") in ("crash", "timeout"):
-        reasons.append(f"WER transcription: {asr.get('error', asr['status'])}")
+    reasons = [f"{t['key']}: {why(t, fail_above)}" for t in result.get("tests", []) if not test_ok(t, fail_above)]
     return (FAILED, reasons) if reasons else (PASSED, [])
 
 
@@ -64,6 +72,18 @@ WINDOWS_CODES = {0xC0000005: "access violation", 0xC000001D: "illegal CPU instru
 SIGNALS = {4: "illegal CPU instruction (SIGILL)", 6: "aborted (SIGABRT)", 7: "bus error (SIGBUS)",
            8: "floating point exception (SIGFPE)", 9: "killed (SIGKILL), often out of memory",
            11: "segmentation fault (SIGSEGV)"}
+
+
+def crash_reason(code, said=""):
+    """'crashed: segmentation fault (SIGSEGV)', or 'exited with code 1: <what it said last>'."""
+    if code < 0 and -code in SIGNALS:
+        return f"crashed: {SIGNALS[-code]}"
+    if code > 128 and code - 128 in SIGNALS and sys.platform != "win32":
+        return f"crashed: {SIGNALS[code - 128]}"
+    unsigned = code & 0xFFFFFFFF
+    if unsigned in WINDOWS_CODES:
+        return f"crashed: {WINDOWS_CODES[unsigned]} (0x{unsigned:08X})"
+    return f"exited with code {code}" + (f": {said}" if said else "")
 
 
 def exit_reason(code):

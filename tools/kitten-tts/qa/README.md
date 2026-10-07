@@ -11,14 +11,18 @@ It assumes nothing about what should work. It answers two questions:
 - **Did this change break anything?** Each run is compared with the latest finished run
   on `main` (or this branch's previous run when `main` has none). The run fails only when
   something that works there stops working here. What does not work on `main` either is
-  listed, not failed; what starts working is marked **new**. A test failure on a CPU the
-  `main` run never drew is reported but not counted, since runner CPUs are assigned at
-  random. The first run, with nothing to compare with, only reports.
+  listed, not failed; what starts working is marked **new**. The first run, with nothing
+  to compare with, only reports.
+
+Not counted as broken, but listed: a test failure on a CPU the `main` run never drew
+(runner CPUs are assigned at random), and a timeout on a platform that also timed out on
+`main` or where `main` took over half the limit.
 
 It runs on pull requests and pushes to `main` that touch kitten-tts, GGML, llama, the
 normalizer or the build. You can also start it from the Actions tab. Every install,
 build, model download, test and transcription is stopped after `[limits] step_minutes`
-(10 min), and a job after `[limits] job_minutes` (45).
+(10 min); no test starts when the job is near `[limits] job_minutes` (45), so every job
+reports.
 
 ## What each job does
 
@@ -34,19 +38,21 @@ build, model download, test and transcription is stopped after `[limits] step_mi
 
 ## What the report shows
 
-- **Platforms:** the CPU (cores, RAM and the SIMD features GGML can use), build time,
-  tests passed, where GGML keeps the weights (AMX on Intel CPUs that have it) and job time.
-  Jobs slower than `report.slow_job_minutes` are flagged.
-- **Tests:** one row per README example and one column per platform.
-- **Speed:** the real-time factor kitten-tts reports for each decoder, warm (`--repeat 3`),
-  and LM tokens per second.
-- **Broke since the baseline:** one line per broken test, with a link to the job's log and
-  the log's tail. The run summary also lists everything that does not work, with logs.
+The pull request gets one comment for each commit, laid out like the React Native SDK's:
 
-The run summary also has every test's numbers: time, LM and decoder seconds, audio length,
-tokens, WER and what Whisper heard. Audio is attached to each job.
+- **Summary:** the commit, how many platforms pass every test, and what it was compared with.
+- **Broke in This PR:** only when something broke, one row per test with a log link.
+- **Platform Status:** one row per platform: the CPU (cores, RAM and the SIMD features GGML
+  can use), build, tests passed, average and worst real-time factor, WER and job time
+  (flagged over `report.slow_job_minutes`).
+- **What Does Not Work:** one row per reason, with every platform it happens on.
+- **Tests:** one row per README example, one column per platform and the CPU it drew.
+- **Notes:** what started working, what was flaky (crashed, then passed when run again) and
+  what was not counted and why.
 
-The run fails only when something that works in the `main` run breaks here.
+The run summary adds every test's numbers (time, LM and decoder seconds, audio length,
+tokens, WER, what Whisper heard), where GGML kept the weights (AMX on Intel CPUs that have
+it), and the log of every failure. Audio is attached to each job.
 
 ## Changing what is tested
 

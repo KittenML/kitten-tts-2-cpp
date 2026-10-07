@@ -35,7 +35,9 @@ cmake_args = [
 ]
 python = "3.12"     # builds the normalizer data; its torch provides CPU LibTorch
 torch = "torch"     # pip requirement for LibTorch
-torch_index = ""    # pip index for torch; Linux needs the CPU-only one, as PyPI's Linux torch is a CUDA build
+# The README asks for a CPU PyTorch. PyTorch's CPU index has one for every runner here;
+# PyPI's Linux torch is a CUDA build and PyPI has none for Windows ARM64.
+torch_index = "https://download.pytorch.org/whl/cpu"
 
 # -- Tests --------------------------------------------------------------------
 # The README's examples. In args, {text}, {voice}, {threads} and {out} are filled in;
@@ -109,19 +111,16 @@ args = ["--repeat", "3", "--threads", "{threads}", "--text", "{text}", "--output
 [[target]]
 name = "Linux x64"
 runner = "ubuntu-24.04"            # AMD EPYC or Intel Xeon, 4 vCPU, 16 GB
-torch_index = "https://download.pytorch.org/whl/cpu"
 
 [[target]]
 name = "Linux x64 (Clang)"
 runner = "ubuntu-24.04"
-torch_index = "https://download.pytorch.org/whl/cpu"
 cmake_args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
 tests = ["repo_tests", "default", "student_w4", "voice_seed"]
 
 [[target]]
 name = "Linux ARM64"
 runner = "ubuntu-24.04-arm"        # Arm Neoverse, 4 vCPU, 16 GB
-torch_index = "https://download.pytorch.org/whl/cpu"   # PyPI's Linux ARM64 torch is a CUDA build
 
 [[target]]
 name = "macOS Apple Silicon"
@@ -141,3 +140,4 @@ runner = "macos-15-intel"          # Intel Core i7, 4 vCPU, 14 GB
 [[target]]
 name = "Windows ARM64"
 runner = "windows-11-arm"          # Arm Cobalt 100, 4 vCPU, 16 GB
+cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESSL=ON"]   # MSVC, as on Windows x64

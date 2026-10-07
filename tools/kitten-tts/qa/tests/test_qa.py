@@ -13,9 +13,9 @@ sys.path.insert(0, QA)
 import plan  # noqa: E402
 import report  # noqa: E402
 import run_target  # noqa: E402
-from common import FAILED, NO_RESULT, PASSED, classify, exit_reason, wer  # noqa: E402
+from common import FAILED, NO_RESULT, PASSED, classify, crash_reason, exit_reason, wer  # noqa: E402
 
-OK, BAD, LATE = "\u2705", "\u274c", "\u23f1\ufe0f"
+OK, BAD, NONE, DOT = "\u2705", "\u274c", "\u2014", "\u00b7"
 ASR = {"enabled": True, "model": "openai/whisper-small.en", "fail_above": 0.5}
 
 # Tests use this, not config.toml, so editing the real config never breaks them.
@@ -50,7 +50,9 @@ tests = ["default"]
 
 def spec(**kw):
     s = {"id": "linux-x64", "name": "Linux x64", "runner": "ubuntu-24.04", "text": "Hello there.", "voice": "Bruno",
-         "asr": ASR, "build": {}, "tests": [{"key": "default", "title": "Speak"}, {"key": "download", "title": "Download"}]}
+         "asr": ASR, "build": {}, "limits": {"step_minutes": 10},
+         "tests": [{"key": "default", "title": "Speak", "args": ["--text", "{text}"]},
+                   {"key": "download", "title": "Download", "args": ["--text", "{text}"]}]}
     s.update(kw)
     return s
 
@@ -90,6 +92,9 @@ class Helpers(unittest.TestCase):
         self.assertIn("a DLL was not found", exit_reason(-1073741515))
         self.assertIn("segmentation fault", exit_reason(-11))
         self.assertEqual(exit_reason(None), "timed out")
+        self.assertEqual(crash_reason(-11), "crashed: segmentation fault (SIGSEGV)")
+        self.assertEqual(crash_reason(3221225501), "crashed: illegal CPU instruction (0xC000001D)")
+        self.assertEqual(crash_reason(1, "model config has no cpp assets"), "exited with code 1: model config has no cpp assets")
 
     def test_read_float_wav(self):
         samples = [0.0, 0.5, -0.5, 0.25]
@@ -140,6 +145,7 @@ class Plan(unittest.TestCase):
         self.assertEqual([s["name"] for s in specs], ["Linux x64"])
         self.assertEqual(specs[0]["build"]["cmake_args"], ["-DA=1", "-DB=2"])
         self.assertEqual(specs[0]["limits"], {"step_minutes": 10, "job_minutes": 45})
+        self.assertEqual(specs[0]["build"]["torch_index"], "")
         specs = self.expand(path, GITHUB_EVENT_NAME="push", QA_TESTS="default")
         self.assertEqual([[t["key"] for t in s["tests"]] for s in specs], [["default"], ["default"]])
 
@@ -178,73 +184,103 @@ class Report(unittest.TestCase):
         subprocess.run(args, check=True, capture_output=True, env=env)
         gate = subprocess.run([sys.executable, os.path.join(QA, "report.py"), "--gate",
                                os.path.join(d, "out", "summary.json")], capture_output=True, text=True)
+        with open(os.path.join(d, "out", "summary.md"), encoding="utf-8") as f:
+            self.summary = f.read()
         with open(os.path.join(d, "out", "pr-comment.md"), encoding="utf-8") as f:
             return f.read(), gate.returncode
+
+    def row(self, md, name):
+        return next(line for line in md.splitlines() if line.startswith(f"| {name} |"))
 
     def test_first_run_reports_only(self):
         md, code = self.run_report([result()])
         self.assertEqual(code, 0)
-        self.assertIn("Report only: there is no earlier run to compare with yet", md)
-        self.assertIn(f"| Test | Linux x64<br>AMD EPYC 7763 |", md)
+        self.assertTrue(md.startswith("# kitten-tts Platform Report\n\n"))
+        self.assertIn(f"{OK} **Report only**: there is no earlier run to compare with yet.", md)
+        for heading in ("## Summary", "## Platform Status", "## What Does Not Work", "## Tests"):
+            self.assertIn(heading, md)
+        self.assertIn(f"| Linux x64 | AMD EPYC 7763<br>4 cores, 16 GB, AVX2 | {OK} 4 min | {BAD} 1/2 | 0.90 | "
+                      "0.90 default | 0% |", md)
+        self.assertIn("| Test | Linux x64<br>AMD EPYC 7763 |", md)
         self.assertIn(f"| Speak | {OK} |", md)
         self.assertIn(f"| Download | {BAD} |", md)
-        self.assertIn("- Linux x64: download: no cpp assets", md)
+        self.assertIn("| Download | no cpp assets | Linux x64 |", md)
+        self.assertNotIn("## Job Details", md)
+        self.assertIn("## Job Details", self.summary)
 
     def test_a_test_that_works_on_main_and_breaks_fails_the_run(self):
-        now = [result(tests=[test(status="fail", error="kitten-tts exited", log_tail="Killed"),
+        now = [result(tests=[test(status="fail", error="crashed: segmentation fault (SIGSEGV)", log_tail="Killed"),
                              test("download", "fail", error="no cpp assets")])]
         jobs = [{"name": "Linux x64", "html_url": "https://example.test/1", "started_at": "2026-10-05T10:00:00Z",
                  "completed_at": "2026-10-05T10:40:00Z"}]
         md, code = self.run_report(now, baseline=[result()], jobs=jobs)
         self.assertEqual(code, 1)
-        self.assertIn("1 test broke compared with main", md)
+        self.assertIn(f"{BAD} **1 test broke** compared with main.", md)
+        self.assertIn("| Linux x64 | AMD EPYC 7763 | Speak | crashed: segmentation fault (SIGSEGV) | passed in 5 s | "
+                      "[log](https://example.test/1) |", md)
         self.assertIn(f"| Speak | {BAD} new |", md)
         self.assertIn(f"| Download | {BAD} |", md)                  # failed on main too: listed, not failed
-        self.assertIn("**Linux x64** - Speak: kitten-tts exited - [log](https://example.test/1)", md)
-        self.assertIn("````\nKilled\n````", md)
+        self.assertIn(f"{BAD} 0/2 new", md)
         self.assertIn("\U0001f422 40 min", md)
-        self.assertTrue(md.rstrip().endswith("</details>"))
+        self.assertIn("````\nKilled\n````", self.summary)
 
     def test_failure_on_a_new_cpu_is_reported_not_failed(self):
-        now = [result(tests=[test(status="fail", error="illegal CPU instruction"), test("download", "fail")],
+        now = [result(tests=[test(status="fail", error="crashed: illegal CPU instruction"), test("download", "fail")],
                       cpu="INTEL(R) XEON(R) PLATINUM 8573C")]
         md, code = self.run_report(now, baseline=[result()])
         self.assertEqual(code, 0)
-        self.assertIn("**On a CPU the baseline never drew**, so not counted as broken: "
-                      "Linux x64 on Intel Xeon Platinum 8573C", md)
+        self.assertIn("**Not counted as broken**: Linux x64: Speak on Intel Xeon Platinum 8573C, which the baseline "
+                      "never drew", md)
 
     def test_a_build_that_breaks_fails_even_on_a_new_cpu(self):
         md, code = self.run_report([result(built=False, cpu="Another CPU")], baseline=[result()])
         self.assertEqual(code, 1)
+        self.assertIn(f"| {BAD} build new |", md)
 
     def test_platform_that_never_built_is_listed_and_one_that_starts_is_marked(self):
         arm = spec(id="win-arm", name="Windows ARM64")
         md, code = self.run_report([result(arm, built=False), result()],
                                    baseline=[result(arm, built=False), result(built=False)])
         self.assertEqual(code, 0)
-        self.assertIn("- Windows ARM64: build: error: no LibTorch", md)
+        self.assertIn("| Install LibTorch and build | build: error: no LibTorch | Windows ARM64 |", md)
         self.assertIn(f"{OK} new 4 min", md)
-        self.assertIn("**Works now, did not before:** Linux x64", md)
+        self.assertIn("**Works now**, did not in the baseline: Linux x64: Install LibTorch and build", md)
 
-    def test_missing_job_and_timeouts(self):
-        md, code = self.run_report([result(tests=[test(status="timeout", error="took longer than 10 min")])],
-                                   baseline=[result(), result(spec(id="mac", name="macOS"))],
+    def test_build_errors_drop_paths(self):
+        r = result(built=False)
+        r["build"]["error"] = "/usr/include/c++/14/bits/stl_vector.h:369:35: error: incomplete type"
+        md, _ = self.run_report([r])
+        self.assertIn("| build: stl_vector.h:369:35: error: incomplete type |", md)
+
+    def test_timeouts_count_only_when_main_ran_clean_and_fast(self):
+        stalled = result(tests=[test(status="timeout", error="took longer than 10 min"), test("download")])
+        md, code = self.run_report([stalled], baseline=[result(tests=[test(), test("download")])])
+        self.assertEqual(code, 1)
+        md, code = self.run_report([stalled], baseline=[result(tests=[test(secs=400.0), test("download")])])
+        self.assertEqual(code, 0)
+        self.assertIn("Linux x64: Speak timed out; it took 7 min in the baseline too", md)
+        md, code = self.run_report([stalled], baseline=[result(tests=[test(), test("download", "timeout")])])
+        self.assertEqual(code, 0)
+        self.assertIn("tests on this platform timed out in the baseline too", md)
+
+    def test_missing_job_that_built_on_main_fails(self):
+        md, code = self.run_report([result()], baseline=[result(), result(spec(id="mac", name="macOS"))],
                                    planned=[spec(), spec(id="mac", name="macOS")])
         self.assertEqual(code, 1)
-        self.assertIn(f"| Speak | {LATE} new |", md)
-        self.assertIn(f"{LATE} new", self.row(md, "macOS"))
+        self.assertIn(f"{BAD} no result new", self.row(md.split("## Platform Status")[1], "macOS"))
 
-    def row(self, md, name):
-        return next(l for l in md.splitlines() if l.startswith(f"| {name} |"))
+    def test_skipped_tests_never_count(self):
+        now = result(tests=[test(status="skipped", error="not run: the job ran out of time"), test("download")])
+        md, code = self.run_report([now], baseline=[result(tests=[test(), test("download")])])
+        self.assertEqual(code, 0)
+        self.assertIn(f"| Speak | {NONE} |", md)
 
     def test_flaky_crash_is_listed_not_failed(self):
-        now = [result(tests=[test(flaky="kitten-tts was killed by signal 11 on the first run; passed on the second"),
-                             test("download", "fail")])]
-        md, code = self.run_report(now, baseline=[result()])
+        flaky = "crashed: segmentation fault (SIGSEGV) the first time; passed when run again"
+        md, code = self.run_report([result(tests=[test(flaky=flaky), test("download", "fail")])], baseline=[result()])
         self.assertEqual(code, 0)
         self.assertIn(f"| Speak | {OK} flaky |", md)
-        self.assertIn("**Flaky** (crashed, then passed when run again; does not fail the run): Linux x64 - Speak "
-                      "(kitten-tts was killed by signal 11 on the first run; passed on the second)", md)
+        self.assertIn(f"**Flaky**, crashed and then passed when run again: Linux x64: Speak ({flaky})", md)
 
     def test_crash_detection(self):
         self.assertTrue(run_target.crashed(-11))

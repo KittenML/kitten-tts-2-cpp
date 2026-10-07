@@ -109,10 +109,10 @@ def expand(cfg):
             "text": cfg["sample"]["text"],
             "voice": cfg["sample"]["voice"],
             "asr": cfg.get("asr", {"enabled": False}),
-            "limits": limits,
+            "limits": dict(limits, job_minutes=t.get("timeout_minutes") or limits["job_minutes"]),
             "tests": tests,
         }
-        timeout = t.get("timeout_minutes") or limits["job_minutes"]
+        timeout = spec["limits"]["job_minutes"]     # the runner stops starting tests before GitHub ends the job
         jobs.append({"id": spec["id"], "name": t["name"], "runner": t["runner"], "python": spec["build"]["python"],
                      "timeout": timeout, "spec": json.dumps(spec)})
     if not jobs:
