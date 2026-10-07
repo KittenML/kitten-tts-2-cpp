@@ -164,53 +164,23 @@ def why_of(r, key):
 
 # -- Comparing with the baseline run --------------------------------------------------
 
-def compare(results, baseline, limit_s):
-    """Mark what broke and what started working since the baseline run.
-
-    A test broke when it works in the baseline for the same platform and does not
-    work here. Not counted, but listed:
-    - a failure on a CPU the baseline never drew, which cannot tell a regression
-      from a problem with that CPU (GitHub assigns runner CPUs at random); the
-      build does not depend on the CPU, so it always counts;
-    - a crash of a test that also crashed in the baseline and passed when run again;
-    - a timeout on a platform where the baseline had timeouts too, or where the
-      baseline took over half the limit for that test: a slow runner, not a slowdown.
-    """
+def compare(results, baseline):
+    """A test broke when it passed in the baseline run for the same platform and does not pass
+    here; it works now when it did not pass there. A job GitHub never ran says nothing either way."""
     base = {b["spec"]["name"]: b for b in baseline}
     for r in results:
-        r.update(broke=[], fixed=[], excused=[])
+        r["broke"], r["fixed"] = [], []
         b = r["base"] = base.get(r["spec"]["name"])
-        if not b or b["status"] == NO_RESULT:
+        if not b or NO_RESULT in (r["status"], b["status"]):
             continue
-        if r["status"] == NO_RESULT:
-            continue            # says nothing about the code: it is listed under Notes
-        new_cpu = built(r) and built(b) and cpu_of(r) != cpu_of(b)
-        stalled = "timeout" in b["outcomes"].values()
         for key, now in r["outcomes"].items():
             before = b["outcomes"].get(key)
             if now == "skipped" or before in (None, "skipped"):
                 continue
-            if now == "pass":
-                if before != "pass":
-                    r["fixed"].append(key)
-                continue
-            if before != "pass":
-                continue
-            took = (b["rows"].get(key) or {}).get("secs")
-            crash = ((r["rows"].get(key) or {}).get("error") or "").startswith("crashed:")
-            if key != "build" and new_cpu:
-                r["excused"].append((key, f"on {cpu_of(r)}, which the baseline never drew"))
-            elif crash and (b["rows"].get(key) or {}).get("flaky"):
-                r["excused"].append((key, "crashed; it crashed in the baseline too, then passed when run again"))
-            elif now == "timeout" and stalled:
-                r["excused"].append((key, "timed out; tests on this platform timed out in the baseline too"))
-            elif now == "timeout" and took and took >= limit_s / 2:
-                r["excused"].append((key, f"timed out; it took {minutes(took)} in the baseline too"))
-            else:
+            if now == "pass" and before != "pass":
+                r["fixed"].append(key)
+            elif now != "pass" and before == "pass":
                 r["broke"].append(key)
-    for r in results:
-        for k in ("broke", "fixed", "excused"):
-            r.setdefault(k, [])
 
 
 # -- The PR comment -------------------------------------------------------------------
@@ -367,14 +337,6 @@ def notes_section(results, slow_minutes):
              for r in results for t in r.get("tests", []) if t.get("flaky")]
     if flaky:
         notes.append("**Flaky**, crashed and then passed when run again: " + f" {DOT} ".join(flaky))
-    excused = []
-    for r in results:
-        reasons = {}
-        for k, reason in r["excused"]:
-            reasons.setdefault(reason, []).append(title_of(r, k))
-        excused += [f"{r['spec']['name']}: {', '.join(titles)} {reason}" for reason, titles in reasons.items()]
-    if excused:
-        notes.append("**Not counted as broken**: " + f" {DOT} ".join(excused))
     unrun = [f"{r['spec']['name']}: {', '.join(title_of(r, k) for k, v in r['outcomes'].items() if v == 'skipped')}"
              for r in results if "skipped" in r["outcomes"].values()]
     if unrun:
@@ -399,7 +361,7 @@ def footer(results, ctx):
     asr, limit = spec.get("asr", {}), spec.get("limits", {}).get("step_minutes", 10)
     where = f"the [run summary]({ctx['run_url']})" if ctx.get("run_url") else "the run summary"
     lines = (f"Each setup, build, model download, test and transcription is stopped after {limit} min; a test that "
-             f"crashes is run up to twice more. Every job's numbers, transcripts, logs and audio are in {where}.")
+             f"crashes is run once more. Every job's numbers, transcripts, logs and audio are in {where}.")
     about = [f"Sample text: \"{spec.get('text', '')}\" (voice {spec.get('voice', '?')})",
              "Model files: KittenML/kitten-tts-2 cpp/, with the cpp manifest added locally; the Download test "
              "uses the README's download path as is."]
@@ -505,8 +467,7 @@ def main():
             about = json.load(f)
         about["url"] = f"{server}/{repo}/actions/runs/{about['run_id']}" if server and about.get("run_id") else ""
         baseline = load_results(args.baseline, {})
-    limit = (results[0]["spec"].get("limits", {}).get("step_minutes", 10) if results else 10) * 60
-    compare(results, baseline, limit)
+    compare(results, baseline)
     if args.jobs and os.path.exists(args.jobs):
         with open(args.jobs, encoding="utf-8") as f:
             attach_jobs(results, json.load(f))

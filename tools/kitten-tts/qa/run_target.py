@@ -320,15 +320,15 @@ def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
     code, secs, log = run_cli(binary, env, where + args + ["--report", report],
                               os.path.join(out, "logs", f"{key}.log"), timeout_s)
     first, tries = None, 1
-    while crashed(code) and tries < 3:
-        # A crash gets two more tries: one that passes then is flaky, not broken, and is reported as such.
+    while crashed(code) and tries < 2:
+        # A crash is run once more: one that passes then is flaky, and is reported as such.
         first = first or crash_reason(code)
         tries += 1
         code, more, log = run_cli(binary, env, where + args + ["--report", report],
                                   os.path.join(out, "logs", f"{key}-try{tries}.log"), timeout_s)
         secs += more
         if code == 0:
-            res["flaky"] = f"{first} {'the first time' if tries == 2 else 'twice'}; passed when run again"
+            res["flaky"] = f"{first} the first time; passed when run again"
     res["secs"] = secs
     res["buffers"] = weight_buffers(log)
     if code != 0:
@@ -336,7 +336,7 @@ def run_cli_test(test, spec, binary, env, assets, out, work, timeout_s):
         error = (f"took longer than {span(timeout_s)}" if code is None else
                  crash_reason(code, said[-1] if said else ""))
         if first:
-            error += f", {tries} times" if error == first else f" (first run: {first})"
+            error += ", twice" if error == first else f" (first run: {first})"
         res.update(status="timeout" if code is None else "fail", error=error[:400], log_tail=log[-2500:])
         if code is None and timeout_s < step_limit(spec):
             # Cut short by the job's deadline, not by the step limit: it says nothing either way.

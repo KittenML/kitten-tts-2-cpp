@@ -224,14 +224,6 @@ class Report(unittest.TestCase):
         self.assertIn("\U0001f422 40 min", md)
         self.assertIn("````\nKilled\n````", self.summary)
 
-    def test_failure_on_a_new_cpu_is_reported_not_failed(self):
-        now = [result(tests=[test(status="fail", error="crashed: illegal CPU instruction"), test("download", "fail")],
-                      cpu="INTEL(R) XEON(R) PLATINUM 8573C")]
-        md, code = self.run_report(now, baseline=[result()])
-        self.assertEqual(code, 0)
-        self.assertIn("**Not counted as broken**: Linux x64: Speak on Intel Xeon Platinum 8573C, which the baseline "
-                      "never drew", md)
-
     def test_a_build_that_breaks_fails_even_on_a_new_cpu(self):
         md, code = self.run_report([result(built=False, cpu="Another CPU")], baseline=[result()])
         self.assertEqual(code, 1)
@@ -252,16 +244,10 @@ class Report(unittest.TestCase):
         md, _ = self.run_report([r])
         self.assertIn("| build: stl_vector.h:369:35: error: incomplete type |", md)
 
-    def test_timeouts_count_only_when_main_ran_clean_and_fast(self):
+    def test_a_timeout_of_a_test_that_passed_on_main_fails_the_run(self):
         stalled = result(tests=[test(status="timeout", error="took longer than 10 min"), test("download")])
         md, code = self.run_report([stalled], baseline=[result(tests=[test(), test("download")])])
         self.assertEqual(code, 1)
-        md, code = self.run_report([stalled], baseline=[result(tests=[test(secs=400.0), test("download")])])
-        self.assertEqual(code, 0)
-        self.assertIn("Linux x64: Speak timed out; it took 7 min in the baseline too", md)
-        md, code = self.run_report([stalled], baseline=[result(tests=[test(), test("download", "timeout")])])
-        self.assertEqual(code, 0)
-        self.assertIn("tests on this platform timed out in the baseline too", md)
 
     def test_a_job_github_never_ran_is_listed_not_failed(self):
         md, code = self.run_report([result()], baseline=[result(), result(spec(id="mac", name="macOS"))],
@@ -285,17 +271,6 @@ class Report(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(f"| Speak | {OK} flaky |", md)
         self.assertIn(f"**Flaky**, crashed and then passed when run again: Linux x64: Speak ({flaky})", md)
-
-    def test_a_crash_that_was_flaky_in_the_baseline_is_not_counted(self):
-        crash = result(tests=[test(status="fail", error="crashed: segmentation fault (SIGSEGV), 3 times"),
-                              test("download")])
-        flaky = result(tests=[test(flaky="crashed: segmentation fault (SIGSEGV) the first time; passed when run "
-                                         "again"), test("download")])
-        md, code = self.run_report([crash], baseline=[flaky])
-        self.assertEqual(code, 0)
-        self.assertIn("Linux x64: Speak crashed; it crashed in the baseline too, then passed when run again", md)
-        md, code = self.run_report([crash], baseline=[result(tests=[test(), test("download")])])
-        self.assertEqual(code, 1)                                  # it never crashed in the baseline
 
     def test_crash_detection(self):
         self.assertTrue(run_target.crashed(-11))

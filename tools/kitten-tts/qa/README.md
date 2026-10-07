@@ -14,11 +14,8 @@ It assumes nothing about what should work. It answers two questions:
   listed, not failed; what starts working is marked **new**. The first run, with nothing
   to compare with, only reports.
 
-Not counted as broken, but listed: a test failure on a CPU the `main` run never drew
-(runner CPUs are assigned at random), a crash of a test that also crashed on `main` and
-passed when run again, and a timeout on a platform that also timed out on `main` or where
-`main` took over half the limit. A test that crashes is run up to twice more; one that
-passes then is reported as flaky.
+A job GitHub never ran (no runner free) is shown as "no result" and not counted. A test
+that crashes is run once more; one that passes then is reported as flaky.
 
 It runs on pull requests and pushes to `main` that touch kitten-tts, GGML, llama, the
 normalizer or the build. You can also start it from the Actions tab. Every install,
@@ -50,7 +47,7 @@ The pull request gets one comment for each commit, laid out like the React Nativ
 - **What Does Not Work:** one row per reason, with every platform it happens on.
 - **Tests:** one row per README example, one column per platform and the CPU it drew.
 - **Notes:** what started working, what was flaky (crashed, then passed when run again) and
-  what was not counted and why.
+  what did not run.
 
 The run summary adds every test's numbers (time, LM and decoder seconds, audio length,
 tokens, WER, what Whisper heard), where GGML kept the weights (AMX on Intel CPUs that have
