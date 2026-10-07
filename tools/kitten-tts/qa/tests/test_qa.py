@@ -276,6 +276,8 @@ class Report(unittest.TestCase):
         md, code = self.run_report([now], baseline=[result(tests=[test(), test("download")])])
         self.assertEqual(code, 0)
         self.assertIn(f"| Speak | {NONE} |", md)
+        self.assertIn(f"{BAD} 1/2, 1 not run", md)
+        self.assertIn("**Not run**, the job was near its time limit: Linux x64: Speak", md)
 
     def test_flaky_crash_is_listed_not_failed(self):
         flaky = "crashed: segmentation fault (SIGSEGV) the first time; passed when run again"

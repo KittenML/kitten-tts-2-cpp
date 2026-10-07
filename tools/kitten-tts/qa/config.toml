@@ -126,6 +126,7 @@ runner = "ubuntu-24.04-arm"        # Arm Neoverse, 4 vCPU, 16 GB
 [[target]]
 name = "macOS Apple Silicon"
 runner = "macos-15"                # Apple M1, 3 vCPU, 7 GB
+timeout_minutes = 75               # the README's 8-thread commands use their full 10 min here
 
 [[target]]
 name = "Windows x64"
@@ -137,6 +138,7 @@ cmake_args = ["-DCMAKE_CXX_FLAGS=/Zc:__cplusplus /utf-8", "-DLLAMA_BUILD_LIBRESS
 [[target]]
 name = "macOS Intel"
 runner = "macos-15-intel"          # Intel Core i7, 4 vCPU, 14 GB
+timeout_minutes = 75
 
 [[target]]
 name = "Windows ARM64"

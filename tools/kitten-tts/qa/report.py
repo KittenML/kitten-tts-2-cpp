@@ -279,7 +279,9 @@ def status_section(results, slow_minutes):
             build_cell = new_mark(r, "build", OK) + (f" {minutes(b['build_secs'])}" if b.get("build_secs") else "")
             keys = [t["key"] for t in r["spec"].get("tests", [])]
             passed = sum(r["outcomes"].get(k) == "pass" for k in keys)
+            skipped = sum(r["outcomes"].get(k) == "skipped" for k in keys)
             tests_cell = f"{OK if passed == len(keys) else BAD} {passed}/{len(keys)}"
+            tests_cell += f", {skipped} not run" if skipped else ""
             tests_cell += " new" if any(k != "build" for k in r["broke"]) else ""
         sample = {t["key"] for t in r["spec"].get("tests", []) if "{text}" in " ".join(t.get("args", []))}
         rtfs = {k: t["rtf"] for k, t in r["rows"].items()
@@ -373,6 +375,10 @@ def notes_section(results, slow_minutes):
         excused += [f"{r['spec']['name']}: {', '.join(titles)} {reason}" for reason, titles in reasons.items()]
     if excused:
         notes.append("**Not counted as broken**: " + f" {DOT} ".join(excused))
+    unrun = [f"{r['spec']['name']}: {', '.join(title_of(r, k) for k, v in r['outcomes'].items() if v == 'skipped')}"
+             for r in results if "skipped" in r["outcomes"].values()]
+    if unrun:
+        notes.append("**Not run**, the job was near its time limit: " + f" {DOT} ".join(unrun))
     unheard = [f"{r['spec']['name']} ({r['asr'].get('error', 'failed')})" for r in results
                if (r.get("asr") or {}).get("status") not in (None, "done")]
     if unheard:

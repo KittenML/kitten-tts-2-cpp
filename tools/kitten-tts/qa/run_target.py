@@ -137,8 +137,12 @@ def setup_and_build(spec, out):
     ok, _, tail = step(pip + ["-U", "pip"], log, limit)
     torch_cmd = pip + [b["torch"]] + (["--index-url", b["torch_index"]] if b["torch_index"] else [])
     ok, _, tail = step(torch_cmd, log, limit)
-    extra = ["numpy", "huggingface_hub", "cmake"] + (["transformers"] if spec["asr"].get("enabled") else [])
-    extra += ["ninja"] if "Ninja" in b["cmake_args"] else []
+    extra = ["numpy", "huggingface_hub", "cmake"] + (["ninja"] if "Ninja" in b["cmake_args"] else [])
+    if spec["asr"].get("enabled"):
+        # Whisper runs on this torch: transformers 5.1 and later need torch 2.4, and Intel Macs have none past 2.2.
+        version = _run([sys.executable, "-c", "import torch; print(torch.__version__)"])
+        old = tuple(int(x) for x in re.findall(r"\d+", version)[:2]) < (2, 4) if version else False
+        extra.append("transformers<5.1" if old else "transformers")
     if ok:
         ok, _, tail = step(pip + extra, log, limit)
     res["setup_secs"] = round(time.time() - t0, 1)
