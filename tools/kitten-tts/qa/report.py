@@ -313,7 +313,10 @@ def tests_section(results):
         row = [titles[key]]
         for r in results:
             now = r["outcomes"].get(key)
-            if now in (None, "skipped"):
+            planned = any(t["key"] == key for t in r["spec"].get("tests", []))
+            if planned and r["status"] != NO_RESULT and not built(r):
+                row.append(BAD)            # it does not build there, so none of its tests work
+            elif now in (None, "skipped"):
                 row.append(NONE)
             elif now == "pass":
                 row.append(new_mark(r, key, OK) + (" flaky" if (r["rows"].get(key) or {}).get("flaky") else ""))
@@ -322,7 +325,10 @@ def tests_section(results):
         rows.append(row)
     fail_above = results[0]["spec"].get("asr", {}).get("fail_above", 0)
     headers = [f"{r['spec']['name']}<br>{cpu_of(r)}" if cpu_of(r) else r["spec"]["name"] for r in results]
-    return ("## Tests\n\n" + table(["Test"] + headers, rows, ["---"] + [":---:"] * len(results))
+    unbuilt = [r["spec"]["name"] for r in results if r["status"] != NO_RESULT and not built(r)]
+    note = (f"\n\n**{', '.join(unbuilt)}**: {BAD} on every test, because kitten-tts does not build there (why: What "
+            "Does Not Work above).") if unbuilt else ""
+    return ("## Tests\n\n" + table(["Test"] + headers, rows, ["---"] + [":---:"] * len(results)) + note
             + f"\n\nThe README's examples and the repository's kitten-tts tests, run against this build. {OK} works "
               f"{DOT} {BAD} does not (why above) {DOT} {NONE} not run there {DOT} **flaky**: crashed, then passed when "
               f"run again. Whisper must hear the spoken text (WER {LE} {fail_above:.0%}).")

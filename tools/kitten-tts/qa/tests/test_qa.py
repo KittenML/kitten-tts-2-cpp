@@ -238,6 +238,11 @@ class Report(unittest.TestCase):
         self.assertIn(f"{OK} new 4 min", md)
         self.assertIn("**Works now**, did not in the baseline: Linux x64: Install LibTorch and build", md)
 
+    def test_a_platform_that_does_not_build_is_crosses_in_the_tests_table(self):
+        md, _ = self.run_report([result(), result(spec(id="clang", name="Linux x64 (Clang)"), built=False)])
+        self.assertIn(f"| Speak | {OK} | {BAD} |", md)
+        self.assertIn(f"**Linux x64 (Clang)**: {BAD} on every test, because kitten-tts does not build there", md)
+
     def test_build_errors_drop_paths(self):
         r = result(built=False)
         r["build"]["error"] = "/usr/include/c++/14/bits/stl_vector.h:369:35: error: incomplete type"
