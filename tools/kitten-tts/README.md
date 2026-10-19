@@ -7,9 +7,11 @@ CPU LibTorch, exported from the supplied KittenTTS Python package. No Python
 interpreter or subprocess is used during synthesis. Only KITTEN2 checkpoints
 are accepted.
 
+This guide covers the CPU backend selected by `--backend cpu` (the default). For NVIDIA GPU inference, model download and preparation, and streaming APIs, use the [native CUDA guide](../../native/README.md). Both backends are part of this repository and use the same `kitten-tts` command.
+
 ## Build
 
-Requires a C++17 compiler, CMake, and CPU LibTorch. A CPU PyTorch installation
+Requires a C++20 compiler, CMake, and CPU LibTorch. A CPU PyTorch installation
 can provide LibTorch's headers and libraries. Use matching torch/torchaudio
 versions when preparing assets; export and runtime must use the same LibTorch
 version. The normalizer decompresses its grammar data at build time using Python.
@@ -27,18 +29,13 @@ python -m cmake -S . -B build \
 python -m cmake --build build --target kitten-tts -j 8
 ```
 
-The GitHub normalizer URL was unavailable during initial setup. This workspace's
-submodule was populated from the clean sibling checkout, while `.gitmodules`
-retains `https://github.com/KittenML/kitten-text-processing.git`. A fresh clone
-needs access to that URL, or an equivalent checkout of the pinned commit.
-
 ## Download for inference
 
-Users do not run the exporter. Run `build/bin/kitten-tts --text 'Hello.' --decoder student_w4 --output hello.wav`. The C++ runtime reads the model repository's `config.json` first and caches the selected native files. See the root README for repository, revision, cache, and offline options.
+Users do not run the exporter. Run `build/bin/kitten-tts --text 'Hello.' --decoder student_w4 --output hello.wav`. The C++ runtime reads `config.json` from [KittenML/kitten-tts-2 on Hugging Face](https://huggingface.co/KittenML/kitten-tts-2) first, then downloads and caches the selected CPU model files. See the [root README](../../README.md#download-and-run) for repository, revision, cache, and offline options.
 
 ## Publish native assets
 
-This section is for model publishers. Export each supported decoder using the instructions below, then assemble the exports into the same repository as the Python checkpoint:
+This section is for publishers of CPU model files. For CUDA model preparation, see the [native guide](../../native/README.md#model-files-and-offline-use). Export each supported CPU decoder using the instructions below, then assemble the exports into the same repository as the Python checkpoint:
 
 ```sh
 python tools/kitten-tts/prepare_model_repo.py \

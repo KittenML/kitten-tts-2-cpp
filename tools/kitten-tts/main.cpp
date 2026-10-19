@@ -1,7 +1,20 @@
+#ifndef KITTEN_TTS_CPU
+#define KITTEN_TTS_CPU 1
+#endif
+#ifndef KITTEN_TTS_NATIVE
+#define KITTEN_TTS_NATIVE 0
+#endif
+#if KITTEN_TTS_CPU
 #include "llama.h"
 #include "text.h"
 #include "sampling.h"
 #include "decoder.h"
+#endif
+#if KITTEN_TTS_NATIVE
+#include "native_cli.h"
+#endif
+#include <algorithm>
+#include <vector>
 #include "assets.h"
 #include <chrono>
 #include <clocale>
@@ -14,6 +27,7 @@
 #include <stdexcept>
 using kitten::json;
 using clock_type = std::chrono::steady_clock;
+#if KITTEN_TTS_CPU
 static json read_json(const std::string & path) {
     std::ifstream f(path); if(!f) throw std::runtime_error("cannot open "+path); json j; f>>j;return j;
 }
@@ -40,6 +54,7 @@ struct batch {
     ~batch(){llama_batch_free(b);}
     void position(int i,int pos,bool logits) {b.pos[i]=pos;b.n_seq_id[i]=1;b.seq_id[i][0]=0;b.logits[i]=logits;}
 };
+#endif
 int main(int argc,char ** argv) try {
     std::setlocale(LC_ALL,"C.UTF-8");
     try { std::locale::global(std::locale("C.UTF-8")); } catch (const std::runtime_error &) {}
@@ -51,8 +66,12 @@ int main(int argc,char ** argv) try {
         else {if(key.rfind("--",0)!=0 || i+1>=argc) throw std::runtime_error("expected --option value");args[key]=argv[++i];}
     }
     if(args.count("--help") || argc==1) {
-        std::cout<<"KittenTTS2 CPU inference\n"
+        std::cout<<"KittenTTS2 inference\n"
           "  kitten-tts --text TEXT [--voice Bruno] [--output output.wav]\n"
+          "  --backend cpu|cuda (default cpu)\n"
+          "  --device N --max-streams N --format wav|pcm --output FILE|- (CUDA)\n"
+          "  --stream true|false (CUDA; default true, false uses complete generation)\n"
+          "  --reference-audio FILE --reference-transcript TEXT (CUDA)\n"
           "  --repo ID --revision REV --decoder default|student_w4|student_w8\n"
           "  --cache-dir DIR --offline --download-only\n"
           "  --assets DIR   use local assets instead of downloading\n"
@@ -70,8 +89,23 @@ int main(int argc,char ** argv) try {
         return 0;
     }
     auto get=[&](const std::string & key,const std::string & fallback){auto it=args.find(key);return it==args.end()?fallback:it->second;};
-    const std::vector<std::string> known={"--repo","--revision","--decoder","--cache-dir","--assets","--model","--text","--voice","--output","--data","--threads","--decoder-threads","--seed","--preset","--max-tokens","--temperature","--top-k","--top-p","--min-p","--repetition-penalty","--repetition-window","--run-penalty","--run-grace","--chunk-chars","--chunk-min-chars","--chunk-gap","--report","--logits","--force-tokens","--decode-tokens","--repeat"};
+    const std::vector<std::string> known={"--backend","--device","--max-streams","--format","--stream","--reference-audio","--reference-transcript","--repo","--revision","--decoder","--cache-dir","--assets","--model","--text","--voice","--output","--data","--threads","--decoder-threads","--seed","--preset","--max-tokens","--temperature","--top-k","--top-p","--min-p","--repetition-penalty","--repetition-window","--run-penalty","--run-grace","--chunk-chars","--chunk-min-chars","--chunk-gap","--report","--logits","--force-tokens","--decode-tokens","--repeat"};
     for(auto & a:args) if(std::find(flags.begin(),flags.end(),a.first)==flags.end() && std::find(known.begin(),known.end(),a.first)==known.end()) throw std::runtime_error("unknown option "+a.first);
+    const auto backend = get("--backend", "cpu");
+    if (backend != "cpu" && backend != "cuda") throw std::runtime_error("--backend must be cpu or cuda");
+    if (backend == "cuda") {
+#if KITTEN_TTS_NATIVE
+        return kitten::run_native_cli(args);
+#else
+        throw std::runtime_error("CUDA backend was not built; configure with -DKITTEN_CUDA=ON");
+#endif
+    }
+#if !KITTEN_TTS_CPU
+    throw std::runtime_error("CPU backend was not built; select --backend cuda or enable KITTEN_CPU");
+#else
+    for (const auto & option : {"--device", "--max-streams", "--format", "--stream", "--reference-audio", "--reference-transcript"}) {
+        if (args.count(option)) throw std::runtime_error(std::string(option) + " requires --backend cuda");
+    }
     kitten_text_processing::Normalizer normalizer(get("--data",KITTEN_DEFAULT_DATA));
     if(args.count("--frontend")) {
         std::string line;
@@ -210,4 +244,5 @@ int main(int argc,char ** argv) try {
     std::cout<<report.dump(2)<<'\n';
     }
     return 0;
+#endif
 } catch(const std::exception & e) {std::cerr<<"kitten-tts: "<<e.what()<<'\n';return 1;}

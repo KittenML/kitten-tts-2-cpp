@@ -42,7 +42,7 @@ else()
     add_subdirectory(results)
 endif()
 
-option(LLAMA_BUILD_KITTEN_TTS "Build KittenTTS2 CPU speech inference (requires LibTorch)" OFF)
+option(LLAMA_BUILD_KITTEN_TTS "Build Kitten TTS 2 speech inference" OFF)
 if(LLAMA_BUILD_KITTEN_TTS)
     add_subdirectory(kitten-tts)
 endif()

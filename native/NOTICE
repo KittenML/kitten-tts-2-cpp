@@ -1,0 +1,74 @@
+Kitten TTS 2 native inference engine
+Copyright 2026 KittenML
+Original KittenML material is licensed under the Apache License, Version 2.0
+(LICENSE). This directory also contains material under other licenses;
+the complete native library must not be described as Apache-2.0-only.
+
+The public import starts from native source revision
+d0fa06b1ebdbb502460196f6b8dd86394e8f6830. The CPU backend retains the
+llama.cpp MIT license at the repository root.
+
+The always-compiled tempo stretcher in src/post/atempo.cc and
+include/kt2n/post/atempo.h is adapted through the prior Python implementation
+from FFmpeg libavfilter/af_atempo.c:
+Copyright (c) 2012 Pavel Koshevoy <pkoshevoy at gmail dot com>.
+The upstream file is licensed under the GNU Lesser General Public License,
+version 2.1 or (at your option) any later version. See
+licenses/FFmpeg-LGPL-2.1.txt and the upstream notice:
+https://github.com/FFmpeg/FFmpeg/blob/n7.1/libavfilter/af_atempo.c
+Upstream acknowledges MIT-licensed Apprentice Video algorithm ancestors;
+that acknowledgement does not replace the LGPL notice on FFmpeg's file.
+KittenML's adaptation uses mono streaming C++ classes, float64 time-domain
+correlation, staged speed changes and an exact output-length policy.
+This code remains present when the optional FFmpeg encoder build is disabled.
+
+The normalization token parser in src/text/nemo.cc is derived from NVIDIA
+NeMo Text Processing (Apache-2.0). Grammar generation and word lists retain
+their original NeMo notices and source identifiers in the asset manifest.
+https://github.com/NVIDIA/NeMo-text-processing
+
+OpenFst 1.8.3 is distributed under Apache-2.0; see licenses/OpenFst.txt.
+The build helper repairs two template copy-operation typos for newer GCC.
+PCRE2 10.42 is distributed under its BSD license; see licenses/PCRE2.txt.
+
+The optional multilingual normalization tables retain their Unicode license,
+notice and source manifest in src/text/voice/. Unicode 14 character tables
+are generated from Python's Unicode database. Tokenizer character classes
+follow Hugging Face tokenizers 0.22.2 (Apache-2.0).
+The generated character-category and normalization tables retain these
+licenses in licenses/Python.txt, licenses/Unicode.txt and licenses/Tokenizers.txt.
+They are compact tables extracted from the named versions; they do not
+include a Python interpreter or the tokenizers runtime.
+
+The float32 ziggurat constants in src/render/ziggurat_f32.inc are copied from
+NumPy 1.26.4, Copyright (c) 2005-2023, NumPy Developers, under BSD-3-Clause.
+The full license is retained in licenses/NumPy.txt.
+The PCG64 and SeedSequence implementation in src/render/rng.cc follows
+NumPy 1.26.4 and Melissa E. O'Neill's reference algorithms. Their MIT notices
+are retained in licenses/PCG64.txt and licenses/SeedSequence.txt.
+
+Acoustic model conversion preserves the ResembleAI, Alibaba/CosyVoice and
+Matcha-TTS provenance described in ../tools/kitten-tts/README.md. Model weights
+are downloaded separately and retain the model publisher's license.
+
+The NVIDIA CUDA Toolkit is installed separately for builds. The native build
+links CUDA::cudart_static and uses CMAKE_CUDA_RUNTIME_LIBRARY=Static, so its
+shared library contains NVIDIA CUDA runtime code. That code retains
+NVIDIA's terms; it is not Apache-2.0 material. CUDA 12.8's EULA lists
+libcudart_static.a among redistributable components, subject to its distribution
+requirements. Review those terms before distributing binaries:
+https://docs.nvidia.com/cuda/archive/12.8.0/eula/index.html
+
+Optional output encoders (KT2N_AV) and uploaded-audio decoding for cloning
+(KT2N_VOICE_AV) link FFmpeg's libavformat, libavcodec, libswresample and libavutil.
+The enabled FFmpeg build's own license and configuration apply; some builds
+include GPL components. Review the actual linked libraries before distributing
+a cloning-enabled shared library. See https://ffmpeg.org/legal.html
+FFmpeg source is not bundled here.
+
+Optional cloning weights retain their upstream terms. The pinned
+pyannote/embedding model card declares MIT and requires accepted access through
+Hugging Face. The preparation tool does not grant access or redistribute this
+checkpoint. See README.md for the preparation workflow; source revisions are pinned in tools/kt2n_assets/clone_assets.py.
+CPU-only export dependencies and GoogleTest retain their
+upstream licenses; their source is not included in this directory.

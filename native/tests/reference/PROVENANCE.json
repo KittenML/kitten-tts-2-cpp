@@ -1,0 +1,26 @@
+{
+  "blob_sha1": "552c43b6fcf4cb2039ff93e5c0a75ef1e342126a",
+  "commit": "4253ae55876262b92ae22ebc1b4bd91638d7b4c3",
+  "extracted_with": "tools/check_upstream_reference.py --write (git show + ast.get_source_segment)",
+  "file_sha256": "578fbabd5b6104d2894867fcf5700df7532d1dcc1ed979c4c41b03a28926a601",
+  "path": "kitten_tts_09/fast_lm/packed_ternary.py",
+  "repo": "haaziq-sl/kittenml-api",
+  "symbols": {
+    "GROUP": {
+      "lines": 1,
+      "sha256": "ef36327f073f09ac6defee2d3ac975d595f17af55c04ba5bc938c7c0fc2c1fa6"
+    },
+    "PROJECTION_RE": {
+      "lines": 3,
+      "sha256": "b17527a5ddaea61b7272ac72d16abe167e859fdc5bef7fd93452bcd3b567ec14"
+    },
+    "pack_exact": {
+      "lines": 25,
+      "sha256": "311692456159b3ce893116a5a719d232b6fe9351ac39f6ebecdfd653da648d75"
+    },
+    "unpack": {
+      "lines": 12,
+      "sha256": "ed82c77891293d05e1f66ac499a271bdfa293f897d06768205e7b32a1ce35064"
+    }
+  }
+}

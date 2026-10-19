@@ -1,0 +1,10 @@
+# CPU-only preparation, validated with Python 3.12. Install torch/torchaudio
+# from https://download.pytorch.org/whl/cpu first; see README.md.
+# These dependencies are not required for native inference.
+torch==2.7.1
+torchaudio==2.7.1
+numpy==1.26.4
+scipy==1.15.3
+librosa==0.11.0
+asteroid-filterbanks==0.4.0
+huggingface-hub==0.35.3

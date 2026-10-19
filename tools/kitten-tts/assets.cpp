@@ -1,9 +1,15 @@
 #include "assets.h"
 #include "download.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
+#if KITTEN_TTS_NATIVE
+#include "kt2n/sha256.h"
+#include <array>
+#endif
 
 namespace kitten {
 namespace fs = std::filesystem;
@@ -49,6 +55,62 @@ assets resolve_assets(const std::map<std::string, std::string> & args) {
     std::ifstream config_file(fetch("config.json"));
     config_file >> result.config;
     if (result.config.at("type") != "KITTEN2") throw std::runtime_error("only KITTEN2 is supported");
+#if KITTEN_TTS_NATIVE
+    if (get("--backend", "cpu") == "cuda") {
+        if (get("--decoder", "default") != "default") throw std::runtime_error("CUDA supports only the default decoder; student decoders require --backend cpu");
+        if (!result.config.contains("native")) throw std::runtime_error("model config has no native CUDA assets; prepare a native bundle or select a repository with a native manifest");
+        const auto & manifest = result.config.at("native");
+        if (manifest.at("version") != 1 || manifest.value("decoder", "default") != "default") throw std::runtime_error("unsupported native asset manifest");
+        auto asset = [&](const json & entry) {
+            const auto path = fetch(entry.at("file").get<std::string>());
+            if (fs::file_size(path) != entry.at("size").get<uint64_t>()) throw std::runtime_error("native asset size mismatch: " + path);
+            const auto expected = entry.at("sha256").get<std::string>();
+            if (!kt2n::is_sha256_hex(expected)) throw std::runtime_error("invalid native asset SHA256: " + path);
+            kt2n::Sha256 hash;
+            std::ifstream input(path, std::ios::binary);
+            std::array<char, 65536> buffer;
+            while (input) {
+                input.read(buffer.data(), buffer.size());
+                hash.update(buffer.data(), static_cast<size_t>(input.gcount()));
+            }
+            if (!input.eof() || hash.hexdigest() != expected) throw std::runtime_error("native asset SHA256 mismatch: " + path);
+            return path;
+        };
+        result.model = asset(manifest.at("lm"));
+        result.decoder = asset(manifest.at("acoustic"));
+        result.voices = asset(manifest.at("voices"));
+        result.tokenizer = asset(manifest.at("tokenizer"));
+        auto directory = manifest.at("text").at("directory").get<std::string>();
+        check_path(directory);
+        if (manifest.at("text").at("files").empty()) throw std::runtime_error("native text asset list is empty");
+        for (const auto & entry : manifest.at("text").at("files")) {
+            const auto file = entry.at("file").get<std::string>();
+            if (file.rfind(directory + "/", 0) != 0) throw std::runtime_error("native text asset is outside its directory");
+            asset(entry);
+        }
+        result.text_data = (root / directory).string();
+        if (manifest.contains("levers")) result.levers = asset(manifest.at("levers"));
+        if (args.count("--reference-audio")) {
+            if (!manifest.contains("cloning")) throw std::runtime_error("model config has no native cloning assets; prepare the bundle with --with-cloning");
+            const auto & cloning = manifest.at("cloning");
+            if (cloning.at("version") != 1) throw std::runtime_error("unsupported native cloning manifest");
+            const auto clone_dir = cloning.at("directory").get<std::string>();
+            check_path(clone_dir);
+            std::vector<std::string> files;
+            for (const auto & entry : cloning.at("files")) {
+                const auto file = entry.at("file").get<std::string>();
+                if (file.rfind(clone_dir + "/", 0) != 0) throw std::runtime_error("native cloning asset is outside its directory");
+                asset(entry);
+                files.push_back(file);
+            }
+            for (const auto * name : {"s3gen.safetensors", "voicebuild_consts.safetensors", "voicebuild_pyannote.safetensors"}) {
+                if (std::find(files.begin(), files.end(), clone_dir + "/" + name) == files.end()) throw std::runtime_error(std::string("missing native cloning asset: ") + name);
+            }
+            result.voice_build_dir = (root / clone_dir).string();
+        }
+        return result;
+    }
+#endif
     bool need_model = !args.count("--decode-tokens"), need_decoder = !args.count("--tokens-only") || args.count("--decode-tokens");
     if (!result.config.contains("cpp")) {
         if (!local) throw std::runtime_error("model config has no cpp assets; the model publisher must upload the prepared native assets and cpp manifest");

@@ -1,0 +1,14 @@
+{
+  "source": "https://github.com/haaziq-sl/kitten-text-processing",
+  "rules": "voice-20261015-3",
+  "files": {
+    "voice_normalizer.cpp": "826019df771a33622dfed0252885304df1e6c3cc7183cf63d3ed34af38154e05",
+    "voice_normalizer.h": "1211d50565d12a30fd17376b77775d84a9fae5bc6dcf9c3adaf14a7bd0789930",
+    "voice_data.hpp": "eab72522e24aca856a5bcc972e8dee0a672db13501a29fd8d41be261a5782516",
+    "NOTICE": "b5e49d3a0ffc643aaa7738e20a8011f73287cc6ec509ff60d585712ba90f749c",
+    "LICENSE-UNICODE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+  },
+  "upstream": "https://github.com/KittenML/kitten-text-processing",
+  "upstream_base": "1988d61",
+  "source_commit": "624e72d127b78509007fd4852afacee58b685d78"
+}
