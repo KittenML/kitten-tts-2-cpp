@@ -88,7 +88,18 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
+// Model weight tensors by index, e.g. to check which buffer (device) holds each weight after load.
+// Returns nullptr when i is out of range.
+LLAMA_API int32_t                    llama_model_n_tensors          (const struct llama_model * model);
+LLAMA_API const struct ggml_tensor * llama_model_get_tensor_by_index(const struct llama_model * model, int32_t i);
+
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
+
+// Backend splits of the last scheduled graph, e.g. to check that no op falls back to the CPU.
+LLAMA_API int32_t llama_get_graph_splits(const struct llama_context * ctx);
+
+// Whether Flash Attention is enabled, after "auto" is resolved.
+LLAMA_API bool llama_get_flash_attn(const struct llama_context * ctx);
 
 // Set whether the context outputs nextn embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0

@@ -2421,6 +2421,40 @@ size_t quantize_tq2_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * ggml_row_size(GGML_TYPE_TQ2_1, n_per_row);
 }
 
+// lossless: one TQ2_1 block -> four Q2_0 blocks; each 128-group scale is copied bit-exact to two Q2_0 blocks
+bool ggml_repack_tq2_1_to_q2_0(const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    if (nrows < 0 || n_per_row < 0 || n_per_row % QK_K != 0) {
+        return false;
+    }
+    const block_tq2_1 * x = (const block_tq2_1 *) src;
+    block_q2_0 * y = (block_q2_0 *) dst;
+    const int64_t nb = nrows * (n_per_row / QK_K);
+    for (int64_t i = 0; i < nb; ++i) {
+        for (int g = 0; g < 2; ++g) {
+            block_q2_0 * out = y + 4*i + 2*g;
+            out[0].d = x[i].d[g];
+            out[1].d = x[i].d[g];
+            for (int q = 0; q < 8; ++q) {
+                // byte t holds code l (elements g*128 + l*32 + 4*q + t) at bits 2*l
+                const uint8_t * b = x[i].qs + g*32 + 4*q;
+                uint32_t w = (uint32_t) b[0] | (uint32_t) b[1] << 8 | (uint32_t) b[2] << 16 | (uint32_t) b[3] << 24;
+                if (w & (w >> 1) & 0x55555555u) {
+                    return false; // code 3 is invalid in TQ2_1
+                }
+                // transpose the 4x4 matrix of 2-bit codes, so byte l holds code t at bits 2*t
+                uint32_t s = (w ^ (w >> 12)) & 0x0000F0F0u;
+                w ^= s ^ (s << 12);
+                s = (w ^ (w >> 6)) & 0x00CC00CCu;
+                w ^= s ^ (s << 6);
+                for (int l = 0; l < 4; ++l) {
+                    out[l/2].qs[(l%2)*8 + q] = (uint8_t) (w >> (8*l));
+                }
+            }
+        }
+    }
+    return true;
+}
+
 void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;

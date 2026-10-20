@@ -4549,6 +4549,7 @@ struct ggml_backend_cuda_device_context {
     std::string description;
     std::string pci_bus_id;
     int op_offload_min_batch_size;
+    bool integrated; // cached at registration: cudaGetDeviceProperties is slow (1.5 ms per call under nsys) and get_type is called per tensor
 };
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
@@ -4681,10 +4682,7 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
 
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, ggml_cuda_get_physical_device(ctx->device)));
-
-    return prop.integrated
+    return ctx->integrated
         ? GGML_BACKEND_DEVICE_TYPE_IGPU
         : GGML_BACKEND_DEVICE_TYPE_GPU;
 }
@@ -5394,6 +5392,10 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                     c = std::tolower(c);
                 }
                 dev_ctx->op_offload_min_batch_size = min_batch_size;
+
+                cudaDeviceProp prop;
+                CUDA_CHECK(cudaGetDeviceProperties(&prop, physical_id));
+                dev_ctx->integrated = prop.integrated;
 
                 ggml_backend_dev_t dev = new ggml_backend_device {
                     /* .iface   = */ ggml_backend_cuda_device_interface,

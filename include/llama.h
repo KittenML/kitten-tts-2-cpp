@@ -340,6 +340,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool gpu_repack;      // repack TQ2_1 weights to Q2_0 (lossless) for GPUs that have no TQ2_1 kernels
     };
 
     struct llama_sampler_seq_config {

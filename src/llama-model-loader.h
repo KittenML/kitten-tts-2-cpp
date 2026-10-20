@@ -114,6 +114,15 @@ struct llama_model_loader {
 
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
 
+    // TQ2_1 weights created as Q2_0 for a GPU buffer type that has no TQ2_1 kernels; load_all_data repacks them
+    bool gpu_repack = true;
+    struct repack_stats {
+        size_t n_tensors = 0;
+        size_t n_bytes_file = 0;
+        size_t n_bytes_repacked = 0;
+    };
+    std::map<std::string, repack_stats> repacked; // by buffer type name
+
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;
     std::string first_tensor_moved_name;
@@ -193,6 +202,9 @@ struct llama_model_loader {
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
+
+    // true if a tensor in ctx has a different type than in the file (repacked at load time)
+    bool has_repacked_tensors(ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;

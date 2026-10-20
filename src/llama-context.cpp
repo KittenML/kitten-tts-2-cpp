@@ -4182,6 +4182,14 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
     return ctx->memory_breakdown();
 }
 
+int32_t llama_get_graph_splits(const struct llama_context * ctx) {
+    return ggml_backend_sched_get_n_splits(ctx->get_sched());
+}
+
+bool llama_get_flash_attn(const struct llama_context * ctx) {
+    return ctx->get_cparams().flash_attn;
+}
+
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
 }
