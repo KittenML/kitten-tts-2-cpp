@@ -6,6 +6,7 @@
 #include <chrono>
 #include <clocale>
 #include <cstring>
+#include <future>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -44,7 +45,7 @@ int main(int argc,char ** argv) try {
     std::setlocale(LC_ALL,"C.UTF-8");
     try { std::locale::global(std::locale("C.UTF-8")); } catch (const std::runtime_error &) {}
     std::map<std::string,std::string> args;
-    const std::vector<std::string> flags={"--download-only","--offline","--no-normalize","--no-reference","--no-repack","--greedy","--tokens-only","--frontend","--help"};
+    const std::vector<std::string> flags={"--download-only","--offline","--no-normalize","--no-reference","--no-repack","--greedy","--tokens-only","--frontend","--help","--no-overlap","--no-context-reuse"};
     for(int i=1;i<argc;++i) {
         std::string key=argv[i];
         if(std::find(flags.begin(),flags.end(),key)!=flags.end()) args[key]="1";
@@ -64,6 +65,7 @@ int main(int argc,char ** argv) try {
           "  --repetition-penalty F --repetition-window N --run-penalty F --run-grace N\n"
           "  --chunk-chars N --chunk-min-chars N --chunk-gap F\n"
           "  --no-normalize --no-reference --greedy --tokens-only --report FILE\n"
+          "  --no-overlap --no-context-reuse (disable the pipelined/context-reuse fast paths)\n"
           "  --logits FILE --force-tokens FILE (teacher-forced LM parity)\n"
           "  --decode-tokens FILE (zero-based codec IDs) --repeat N (benchmark)\n"
           "  --frontend (JSON lines on stdin; text/chunking/sampling diagnostics)\n";
@@ -166,29 +168,54 @@ int main(int argc,char ** argv) try {
     if(args.count("--force-tokens")) {forced=read_json(args.at("--force-tokens")).get<std::vector<int>>();if(chunks.size()!=1) throw std::runtime_error("teacher forcing requires one chunk");}
     int repeats=std::stoi(get("--repeat","1"));
     if(repeats<1 || repeats>100) throw std::runtime_error("repeat must be 1..100");
+    const bool overlap=!args.count("--no-overlap");
+    const bool reuse_ctx=!args.count("--no-context-reuse");
+    report["overlap"]=overlap;report["context_reuse"]=reuse_ctx;
     for(int repeat=0;repeat<repeats;++repeat) {
     waves.clear(); report["chunks"]=json::array(); report["iteration"]=repeat+1; report["seed"]=seed; rng.seed(seed);
     if(decoder) decoder->seed(seed);
     double lm_seconds=0,decoder_seconds=0;size_t total_tokens=0;
-    for(auto & chunk:chunks) {
+    auto total_begin=clock_type::now();
+    const int n_chunks=int(chunks.size());
+    // overlap only helps with >=2 chunks and a decoder present; reuse only amortizes across chunks
+    const bool pipeline=overlap && decoder && n_chunks>1 && !args.count("--force-tokens");
+    std::unique_ptr<llama_context,decltype(&llama_free)> shared_ctx(nullptr,llama_free);
+    if(reuse_ctx && n_chunks>1 && !args.count("--force-tokens")) {
+        auto cp=llama_context_default_params();cp.n_ctx=max_tokens+4096;cp.n_batch=512;cp.n_ubatch=512;cp.n_threads=threads;cp.n_threads_batch=threads;cp.no_perf=false;
+        shared_ctx.reset(llama_init_from_model(model.get(),cp));
+        if(!shared_ctx) throw std::runtime_error("cannot initialize shared context");
+    }
+    using voc_result=std::pair<std::vector<float>,double>;
+    std::future<voc_result> pending;
+    for(int ci=0;ci<n_chunks;++ci) {
+        const std::string & chunk=chunks[ci];
         auto ids=kitten::prompt(tm,tokenize(vocab,chunk),ref_text,ref_audio,emotion,!args.count("--no-reference") && gen.value("use_reference_prompt",true));
-        int budget=chunks.size()==1?max_tokens:std::max(200,std::min(max_tokens,int(kitten::characters(chunk)/20.0*25*1.8)));
+        int budget=n_chunks==1?max_tokens:std::max(200,std::min(max_tokens,int(kitten::characters(chunk)/20.0*25*1.8)));
         if(args.count("--force-tokens")) budget=forced.size()+1;
         auto cp=llama_context_default_params();cp.n_ctx=ids.size()+budget;cp.n_batch=512;cp.n_ubatch=512;cp.n_threads=threads;cp.n_threads_batch=threads;cp.no_perf=false;
-        std::unique_ptr<llama_context,decltype(&llama_free)> ctx(llama_init_from_model(model.get(),cp),llama_free);
-        if(!ctx) throw std::runtime_error("cannot initialize context");
+        llama_context * ctx=nullptr;
+        std::unique_ptr<llama_context,decltype(&llama_free)> fresh_ctx(nullptr,llama_free);
+        if(shared_ctx) {
+            // reuse one context across chunks; wipe KV so each chunk starts clean
+            llama_memory_clear(llama_get_memory(shared_ctx.get()),true);
+            ctx=shared_ctx.get();
+        } else {
+            fresh_ctx.reset(llama_init_from_model(model.get(),cp));
+            if(!fresh_ctx) throw std::runtime_error("cannot initialize context");
+            ctx=fresh_ctx.get();
+        }
         auto begin=clock_type::now();
         { batch b(1,speaker.size());b.b.n_tokens=1;std::copy(speaker.begin(),speaker.end(),b.b.embd);b.position(0,0,false);
-          if(llama_decode(ctx.get(),b.b)) throw std::runtime_error("speaker prefill failed"); }
+          if(llama_decode(ctx,b.b)) throw std::runtime_error("speaker prefill failed"); }
         for(size_t offset=1;offset<ids.size();) {
             int n=std::min(size_t(512),ids.size()-offset);batch b(n);b.b.n_tokens=n;
             for(int i=0;i<n;++i) {b.b.token[i]=ids[offset+i];b.position(i,offset+i,offset+i+1==ids.size());}
-            if(llama_decode(ctx.get(),b.b)) throw std::runtime_error("prompt prefill failed");
+            if(llama_decode(ctx,b.b)) throw std::runtime_error("prompt prefill failed");
             offset+=n;
         }
         auto history=ids;std::vector<int> audio_ids,generated;bool ended=false;
         for(int step=0;step<budget;++step) {
-            const float * raw=llama_get_logits_ith(ctx.get(),-1);
+            const float * raw=llama_get_logits_ith(ctx,-1);
             if(logits_file.is_open()) logits_file.write(reinterpret_cast<const char *>(raw),n_vocab*sizeof(float));
             if(args.count("--force-tokens") && step==int(forced.size())) break;
             std::vector<float> scores(raw,raw+n_vocab);kitten::process(scores,history,ids.size(),tm,settings);
@@ -197,15 +224,27 @@ int main(int argc,char ** argv) try {
             generated.push_back(token);history.push_back(token);
             if(!args.count("--force-tokens") && (token==tm.speech_end || token==tm.stop)) {ended=true;break;}
             if(token>=tm.base && token<tm.base+tm.count) audio_ids.push_back(token-tm.base);
-            if(step+1<budget) {batch b(1);b.b.n_tokens=1;b.b.token[0]=token;b.position(0,history.size()-1,true);if(llama_decode(ctx.get(),b.b)) throw std::runtime_error("generation failed");}
+            if(step+1<budget) {batch b(1);b.b.n_tokens=1;b.b.token[0]=token;b.position(0,history.size()-1,true);if(llama_decode(ctx,b.b)) throw std::runtime_error("generation failed");}
         }
         double elapsed=std::chrono::duration<double>(clock_type::now()-begin).count();lm_seconds+=elapsed;total_tokens+=generated.size();
         report["chunks"].push_back({{"text",chunk},{"prompt",ids},{"generated",generated},{"audio_tokens",audio_ids},{"terminated",ended},{"lm_seconds",elapsed}});
-        llama_perf_context_print(ctx.get());
-        if(decoder) {begin=clock_type::now();waves.push_back(decoder->decode(audio_ids,ref.dump()));decoder_seconds+=std::chrono::duration<double>(clock_type::now()-begin).count();}
+        llama_perf_context_print(ctx);
+        if(decoder) {
+            if(pipeline) {
+                // drain the previous vocode, then launch this chunk's vocode in the background
+                if(pending.valid()) {auto r=pending.get();waves.push_back(std::move(r.first));decoder_seconds+=r.second;}
+                auto ids_copy=std::make_shared<std::vector<int>>(std::move(audio_ids));
+                auto ref_copy=std::make_shared<json>(ref.dump());
+                pending=std::async(std::launch::async,[dec=decoder.get(),ids_copy,ref_copy](){auto t0=clock_type::now();auto w=dec->decode(*ids_copy,*ref_copy);return voc_result{std::move(w),std::chrono::duration<double>(clock_type::now()-t0).count()};});
+            } else {
+                begin=clock_type::now();waves.push_back(decoder->decode(audio_ids,ref.dump()));decoder_seconds+=std::chrono::duration<double>(clock_type::now()-begin).count();
+            }
+        }
     }
+    if(pending.valid()) {auto r=pending.get();waves.push_back(std::move(r.first));decoder_seconds+=r.second;}
     report["lm_seconds"]=lm_seconds;report["decoder_seconds"]=decoder_seconds;report["generated_tokens"]=total_tokens;
-    if(decoder) {auto audio=kitten::join(waves,gap);write_wav(get("--output","output.wav"),audio);report["audio_seconds"]=audio.size()/24000.0;report["rtf"]=(lm_seconds+decoder_seconds)/(audio.size()/24000.0);}
+    report["total_seconds"]=std::chrono::duration<double>(clock_type::now()-total_begin).count();
+    if(decoder) {auto audio=kitten::join(waves,gap);write_wav(get("--output","output.wav"),audio);report["audio_seconds"]=audio.size()/24000.0;report["rtf"]=(lm_seconds+decoder_seconds)/(audio.size()/24000.0);report["rtf_wall"]=report["total_seconds"].get<double>()/(audio.size()/24000.0);}
     if(args.count("--report")) write_json(args.at("--report"),report);
     std::cout<<report.dump(2)<<'\n';
     }
