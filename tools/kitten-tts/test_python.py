@@ -48,6 +48,19 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(self.model._options('Hello.', advanced={'repetition_window': None})['--repetition-window'],
                          str(self.model.advanced_options['repetition_window']))
 
+    def test_gpu_options(self):
+        for kwargs in [dict(gpu_layers=-1), dict(gpu_layers='x'), dict(gpu_layers=True), dict(main_gpu=-1),
+                       dict(flash_attn='maybe'), dict(decoder_device='tpu'), dict(allow_hybrid='yes')]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                KittenTTS(self.assets, model_path=self.model_path, decoder='student_w4', **kwargs)
+        self.model.generate('Hello.', advanced={'seed': 1234})
+        self.assertEqual(self.model.last_report['lm']['placement'], 'cpu')
+        self.assertEqual((self.model.placement, self.model.device), ('cpu', 'cpu'))
+        import torch
+        if torch.version.cuda is None or not torch.cuda.is_available():
+            with self.assertRaises(RuntimeError):
+                KittenTTS(self.assets, model_path=self.model_path, decoder='student_w4', gpu_layers=99)
+
     def test_cli_parity_and_repeat(self):
         audio = self.model.generate('Hello again.', advanced={'seed': 1234})
         ids = self.model.last_report['chunks'][0]['generated']
