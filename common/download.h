@@ -61,6 +61,7 @@ struct common_download_opts {
     bool download_dflash  = false;
     bool download_dspark  = false;
     common_download_callback * callback = nullptr;
+    std::string ca_cert_file;
 };
 
 struct common_download_task {

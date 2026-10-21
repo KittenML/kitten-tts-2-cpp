@@ -17,14 +17,19 @@ Alternatively, set `KITTEN_DATA_DIR` to an already prepared grammar directory.
 
 ```sh
 git submodule update --init vendor/kitten-text-processing
-python -m cmake -S . -B build \
+
+cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_STANDARD_REQUIRED=ON \
   -DGGML_CUDA=OFF -DGGML_METAL=OFF \
   -DLLAMA_BUILD_KITTEN_TTS=ON \
-  -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_SERVER=OFF \
+  -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
-python -m cmake --build build --target kitten-tts -j 8
+
+cmake --build build --target kitten-tts -j 8
 ```
 
 The GitHub normalizer URL was unavailable during initial setup. This workspace's
@@ -185,8 +190,7 @@ The same seed does not produce the same sampled tokens in both implementations.
 FP16 is available when minimizing LM numerical differences matters more than speed.
 All 310 packed GGUF tensors were verified to reconstruct the FP16 reference
 exactly, including all 196 packed transformer matrices.
-The runtime is a batch CLI, not a drop-in implementation of the Python streaming
-API. The decoder currently depends on LibTorch rather than a GGML S3 implementation.
+The CLI runs batch synthesis. The Python binding supports sentence-chunk streaming through the same native engine. The decoder currently depends on LibTorch rather than a GGML S3 implementation.
 
 Additional format checks:
 
@@ -212,3 +216,17 @@ Decoder exports come from the Python package's S3 implementation and preserve it
 ResembleAI, Alibaba/CosyVoice and Matcha-TTS provenance. The normalizer retains
 its own license and notices in the submodule. The underlying llama.cpp fork
 retains its MIT license.
+
+## Python binding development
+
+The package at `python/kitten_tts_cpp` wraps `kitten::engine` through a pybind11 extension. The CLI and binding share model loading, token generation, waveform decoding, and audio joins. `setup.py` builds a CPU extension using the pybind11 headers shipped with PyTorch, links the project libraries statically, and bundles the normalizer grammars. LibTorch remains a dependency supplied by the installed PyTorch package.
+
+```sh
+python setup.py build_ext --inplace
+PYTHONPATH=python \
+  KITTEN_TEST_ASSETS=models/kitten2-student-w4 \
+  KITTEN_TEST_GGUF=models/kitten2/model-tq2_1.gguf \
+  python tools/kitten-tts/test_python.py
+```
+
+The integration tests cover actual native inference, CLI token/audio parity, deterministic repeated calls, file output, input validation, and streaming cancellation. Run `test_assets.py` and `check_parity.py` as well after modifying the shared engine. Source distributions include the normalizer source/data, so building from a source archive does not require Git submodule access.

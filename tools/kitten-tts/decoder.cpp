@@ -3,12 +3,12 @@
 #include <torch/script.h>
 #include <ATen/Parallel.h>
 namespace kitten {
-struct decoder::impl { torch::jit::Module module; explicit impl(const std::string & path): module(torch::jit::load(path,torch::kCPU)) { module.eval(); } };
+struct decoder::impl { int threads; torch::jit::Module module; explicit impl(const std::string & path, int n_threads): threads(n_threads), module(torch::jit::load(path,torch::kCPU)) { module.eval(); } };
 decoder::decoder(const std::string & path,int threads,int seed) {
-    at::set_num_threads(threads); at::manual_seed(seed); p=std::make_unique<impl>(path);
+    at::set_num_threads(threads); at::manual_seed(seed); p=std::make_unique<impl>(path,threads);
 }
 decoder::~decoder() = default;
-void decoder::seed(int value) { at::manual_seed(value); }
+void decoder::seed(int value) { at::set_num_threads(p->threads); at::manual_seed(value); }
 std::vector<float> decoder::decode(const std::vector<int> & ids,const std::string & conditioning_json) {
     if(ids.empty()) return {};
     c10::InferenceMode guard;
