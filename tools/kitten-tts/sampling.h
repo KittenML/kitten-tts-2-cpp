@@ -50,7 +50,9 @@ inline void process(std::vector<float> & scores, const std::vector<int> & histor
         std::vector<bool> seen(scores.size(),false);
         for(size_t i=begin;i<history.size();++i) {
             int id=history[i];
-            if(id==t.speech_end || id==t.stop || id==t.base+4299 || seen.at(id)) continue;
+            // Only the terminators are exempt. The silence codec token is penalised like any
+            // other audio token: exempting it lets the model stall in silence runs.
+            if(id==t.speech_end || id==t.stop || seen.at(id)) continue;
             seen[id]=true; scores[id]=scores[id]<0?scores[id]*s.repetition:scores[id]/s.repetition;
         }
     }
@@ -63,12 +65,15 @@ inline void process(std::vector<float> & scores, const std::vector<int> & histor
     if(s.top_p<1) {
         std::vector<size_t> order;
         for(size_t i=0;i<scores.size();++i) if(std::isfinite(scores[i])) order.push_back(i);
+        // Non-finite logits leave nothing to rank; sample() then reports the error.
+        if(!order.empty()) {
         std::sort(order.begin(),order.end(),[&](size_t a,size_t b){return scores[a]<scores[b];});
         float peak=scores[order.back()]; double sum=0; for(float x:scores) sum+=std::exp(double(x-peak));
         double acc=0;
         for(size_t i=0;i+1<order.size();++i) {
             size_t id=order[i]; acc+=std::exp(double(scores[id]-peak))/sum;
             if(acc<=1.0-s.top_p) scores[id]=neg;
+        }
         }
     }
     if(s.min_p>0) {
