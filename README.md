@@ -39,7 +39,7 @@ with KittenTTS("KittenML/kitten-tts-2", decoder="student_w4", threads=8) as mode
         pass  # Each chunk is a float32 NumPy array at model.sample_rate.
 ```
 
-With the GPU package (`kitten-tts-cpp-cu12` on Linux after PyTorch's `cu129` build, `kitten-tts-cpp-cu13` on Windows after its `cu130` build), `KittenTTS(..., gpu_layers=99)` runs the speech LM on an NVIDIA GPU. `main_gpu`, `flash_attn`, `allow_hybrid` and `decoder_device` match the CLI's `--main-gpu`, `--flash-attn`, `--allow-hybrid` and `--decoder-device`, with the same checks and errors. The default `gpu_layers=0` keeps the CPU path and its output unchanged. See the [GPU wheel guide](packaging/README.md#using-the-gpu).
+For NVIDIA GPUs, install the GPU package instead (`kitten-tts-cpp-cu12` on Linux, `kitten-tts-cpp-cu13` on Windows) and pass `gpu_layers=99`; see the [GPU wheel guide](packaging/README.md#using-the-gpu).
 
 Weights and the decoder stay loaded between calls. The GIL is released during native loading and inference. Native inference calls are serialized because the TorchScript decoder uses process-wide random and thread settings. Streaming yields untrimmed sentence chunks as they are decoded; close the iterator when stopping early. `generate` applies the same chunk joins as the CLI. `last_report` contains token IDs, generation timings and the LM placement (`last_report["lm"]["placement"]`).
 
@@ -74,7 +74,7 @@ The normalizer prepares its grammar data using Python at build time. To use exis
 
 ## GPU (CUDA) build
 
-The speech LM can also run on an NVIDIA GPU. Configure with one CUDA 12.8 toolkit and `-DGGML_CUDA=ON`. To run the S3 decoder on the GPU too, use the single configure command in the [CUDA decoder section](tools/kitten-tts/README.md#cuda-waveform-decoder-optional-local-export) of the detailed guide instead, which also points CMake at a CUDA LibTorch.
+The speech LM can also run on an NVIDIA GPU. Install the CUDA 12.8 toolkit and build with `-DGGML_CUDA=ON`:
 
 ```sh
 cmake -S . -B build-cuda \
@@ -92,9 +92,15 @@ cmake --build build-cuda --target kitten-tts -j 8
 build-cuda/bin/kitten-tts --gpu-layers 99 --timings --text 'Hello from the GPU.' --output gpu.wav
 ```
 
-`--gpu-layers` defaults to 0, so CPU runs give the same tokens, audio and logits as before unless you ask for the GPU; they use less memory, because each context reserves one output row and is freed before the decoder runs. With `--gpu-layers 99` the 28 transformer layers and the output head run on the GPU. The TQ2_1 weights are repacked losslessly to the CUDA-supported Q2_0 format at load time. Text normalization, tokenization, the token embedding lookup, sampling and WAV writing stay on the CPU. The S3 decoder stays on the CPU unless you export a CUDA decoder and pass `--decoder-device cuda` (see the detailed guide). If any TQ2_1 weight would stay on the CPU, the runtime stops with an error unless you pass `--allow-hybrid`. Other options are `--main-gpu N` and `--flash-attn auto|on|off`.
+`--gpu-layers 99` runs the language model on the GPU; the default, 0, keeps the CPU path and its output unchanged. To run the S3 decoder on the GPU as well, export a CUDA decoder once and add `--decoder-device cuda` ([how](tools/kitten-tts/README.md#cuda-waveform-decoder-optional-local-export)).
 
-On an RTX 4090 the whole LM used about 1,670 MiB of GPU memory for each of 10 test cases (5 sentences x 2 voices, up to 12.2 s of audio), including about 395 MiB of CUDA context. With the CUDA decoder, one request of one of these sentences peaked at 2,219-2,265 MiB. Later requests in the same process, a 20.9 s chunk and multi-chunk texts peak higher, because LibTorch keeps its cached blocks while the next LM context is allocated: up to about 2,495 MiB for repeated requests and for one 20.9 s chunk, and about 2,876 MiB for a 4-chunk text (about 2,462 MiB with `KITTEN_DECODER_EMPTY_CACHE=1`). GPU memory was measured on that card only. The Q2_0 GPU kernels are validated (kernel tests and logits) on that card (SM89) only; builds of this source also ran full generations on an RTX PRO 6000 (12.0), a Tesla T4 (7.5) and a GTX 1080 Ti (6.1), without a logits comparison. On the RTX 4090 machine (a shared host, with the CPU rows on 8 threads of one 8-core CCD) the LM ran about 455 forward passes/s (37 on the CPU), or 177 to 184 generated tokens/s including CPU sampling (33 on the CPU), and the RTF was 0.14-0.16 with the CUDA decoder, 0.41 with the CPU decoder and 1.28 on the CPU alone. Two setups are supported but are not the fastest, because part of the work stays on the CPU. The CPU decoder next to a GPU LM (the default) makes the decoder the slowest stage: on that RTX 4090 its RTF was 0.28 on the CPU against 0.008 on the GPU. Partial offload with `--allow-hybrid` runs the layers left on the CPU at CPU speed: on a GTX 1080 Ti with `--gpu-layers 14`, the LM took 16.4 s for a 5.2 s sentence, against 1.4 s with every layer on the GPU and 36 s on the CPU alone (8 threads, with the portable CPU code of the CI wheels, which is slower than a native build's). Use it only when the whole LM does not fit in GPU memory. Precision differs from CPU runs, so logits differ slightly: GPU activations are quantized to Q8_1 instead of the CPU's Q8_K (Q8_0 with AMX), the F16 output head uses FP16 products and partial sums on CUDA, and flash attention sums in a different precision (see the detailed guide). `--timings` prints per-stage times, tokens per second, sampling share, RTF and peak GPU memory. See the [GPU section of the detailed guide](tools/kitten-tts/README.md#gpu-cuda-build) for the memory breakdown and the stage list.
+| Setup (RTX 4090) | Real-time factor (lower is faster) | GPU memory |
+|---|---:|---:|
+| Language model and decoder on the GPU (recommended) | 0.15 | about 2.2-2.9 GB |
+| Language model on the GPU, decoder on the CPU | 0.41 | about 1.7 GB |
+| CPU only | 1.28 | none |
+
+Running the decoder on the CPU, or only part of the language model on the GPU (`--allow-hybrid`), is supported but slower. Details: [GPU guide](tools/kitten-tts/README.md#gpu-cuda-build).
 
 ## Download and run
 

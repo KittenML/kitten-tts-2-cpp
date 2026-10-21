@@ -18,17 +18,17 @@ Sources for the matrix: [PyTorch CPU wheels](https://download.pytorch.org/whl/cp
 
 The same workflow also builds the package with NVIDIA GPU support: `kitten-tts-cpp-cu12` for Linux and `kitten-tts-cpp-cu13` for Windows. The import name stays `kitten_tts_cpp`. It runs the speech model on the CPU by default, and on an NVIDIA GPU when you ask for it (see [Using the GPU](#using-the-gpu)).
 
-| Target | Package | Python versions | Built with | Uses the CUDA libraries of | Tested |
-| --- | --- | --- | --- | --- | --- |
-| Linux x86-64, glibc 2.34+ | `kitten-tts-cpp-cu12` | 3.10-3.14 | ubuntu-24.04 + manylinux_2_34, CUDA 12.8 compiler | PyTorch 2.13.0+cu129 | CI without a GPU: import, CPU smoke test, clear "no CUDA device" error. A local build of this package (Python 3.12) also ran on an RTX PRO 6000 (12.0), a Tesla T4 (7.5) and a GTX 1080 Ti (6.1) |
-| Windows x86-64 | `kitten-tts-cpp-cu13` | 3.10-3.14 | windows-2022, CUDA 13.0 compiler | PyTorch 2.13.0+cu130 | CI without a GPU: the same checks. Not tested on a Windows machine with a GPU |
+| Target | Package | Python versions | Built with | Uses the CUDA libraries of |
+| --- | --- | --- | --- | --- |
+| Linux x86-64, glibc 2.34+ | `kitten-tts-cpp-cu12` | 3.10-3.14 | ubuntu-24.04 + manylinux_2_34, CUDA 12.8 compiler | PyTorch 2.13.0+cu129 |
+| Windows x86-64 | `kitten-tts-cpp-cu13` | 3.10-3.14 | windows-2022, CUDA 13.0 compiler | PyTorch 2.13.0+cu130 |
 
 These are 10 CPython builds, one workflow job each. Each wheel is compiled with the same CUDA release as the PyTorch build whose CUDA runtime and cuBLAS it uses. Windows uses CUDA 13 because PyTorch 2.13.0 has no CUDA 12.9 build for Windows.
 
 | | Linux (`kitten-tts-cpp-cu12`) | Windows (`kitten-tts-cpp-cu13`) |
 | --- | --- | --- |
 | Compiled GPU code | compute capability 6.1 (GTX 10xx), 7.5 (GTX 16xx, RTX 20xx, T4), 8.6 (RTX 30xx, A2000, A10), 8.9 (RTX 40xx, L4) and 12.0 (RTX 50xx, RTX PRO 6000) | the same without 6.1: CUDA 13 cannot compile for 6.1, so GTX 10xx cards need the Linux package or the CPU package |
-| Portable GPU code | 8.0, which the driver compiles when the model first loads. On 8.0 cards (A100, A30) this gives code for their own architecture. Newer cards without compiled code (for example H100) run code made for 8.0, which was 5 to 8 times slower per token on the card where it was measured (see [Supported, but not the fastest setup](#supported-but-not-the-fastest-setup)) | the same |
+| Portable GPU code | 8.0, which the driver compiles when the model first loads. On 8.0 cards (A100, A30) this gives code for their own architecture; newer cards without compiled code (for example H100) run code made for 8.0, which is slower (see [Supported, but not the fastest setup](#supported-but-not-the-fastest-setup)) | the same |
 | Waveform decoder on the GPU (`decoder_device="cuda"`) | 7.5 and newer; the PyTorch 2.13.0 CUDA 12.9 build has no code for 6.1 | 7.5 and newer |
 | NVIDIA driver | one for CUDA 12; 570 or newer for 12.0 cards and for cards that use the portable code | 580 or newer (CUDA 13) |
 
@@ -77,21 +77,21 @@ Install the matching CPU PyTorch runtime, then the wheel for your platform and P
 
 ```sh
 python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
-python -m pip install /path/to/kitten_tts_cpp-0.1.0-<python>-<abi>-<platform>.whl
+python -m pip install /path/to/kitten_tts_cpp-<version>-<python>-<abi>-<platform>.whl
 ```
 
-For the GPU package, install the CUDA build of PyTorch instead, then the GPU wheel. On Linux:
+For the GPU package, install the CUDA build of PyTorch instead, then the GPU wheel. Use a virtual environment: `python3 -m venv .venv` and `. .venv/bin/activate` on Linux (recent distributions such as Ubuntu 24.04 do not let pip install into the system Python), or `py -m venv .venv` and `.venv\Scripts\activate` on Windows. On Linux:
 
 ```sh
 python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
-python -m pip install /path/to/kitten_tts_cpp_cu12-0.1.0-<python>-<abi>-<platform>.whl
+python -m pip install /path/to/kitten_tts_cpp_cu12-<version>-<python>-<abi>-<platform>.whl
 ```
 
-On Windows:
+On Windows, PyTorch needs the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe). A new Windows installation may not have it; PyTorch then fails to import with `WinError 126` for `c10.dll`. Then:
 
 ```sh
 python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
-python -m pip install /path/to/kitten_tts_cpp_cu13-0.1.0-<python>-<abi>-win_amd64.whl
+python -m pip install /path/to/kitten_tts_cpp_cu13-<version>-<python>-<abi>-win_amd64.whl
 ```
 
 Install only one of the packages in an environment; all of them provide `kitten_tts_cpp`. The GPU package stops at import with an explanation if the installed PyTorch is a CPU-only build or was built for another CUDA major version.
@@ -122,13 +122,17 @@ The options match the command-line runner's flags, and invalid values give the s
 | `allow_hybrid` | `False` | Accept a model that is only partly on the GPU. |
 | `decoder_device` | `"cpu"` | `"cuda"` runs the waveform decoder on the GPU. It needs a decoder exported for CUDA in a local asset directory (see the [detailed guide](../tools/kitten-tts/README.md#cuda-waveform-decoder-optional-local-export)); the published decoders run on the CPU. |
 
+To run the waveform decoder on the GPU too, export a CUDA decoder as in the [detailed guide](../tools/kitten-tts/README.md#cuda-waveform-decoder-optional-local-export), then pass its folder and the model file: `KittenTTS("models/kitten2-cuda", model_path="../kitten-tts-2/cpp/model-tq2_1.gguf", gpu_layers=99, decoder_device="cuda")`.
+
 `last_report["lm"]` lists where each part runs. On a machine without an NVIDIA GPU or driver, `gpu_layers` above 0 stops with "needs a visible CUDA GPU" and `gpu_layers=0` runs on the CPU. GPU results differ slightly from CPU results because the GPU computes with different precision; see the detailed guide.
 
 ### Supported, but not the fastest setup
 
-These setups work and give correct audio, but they are slower than running both the speech model and the waveform decoder on the GPU. The numbers are for one short sentence (about 5 seconds of audio, voice Bruno, seed 1234, default decoder, second call, 8 CPU threads) with the Linux GPU wheel on otherwise idle machines; "real-time factor" is generation time divided by audio length, so below 1 is faster than real time.
+These setups work and give correct audio, but they are slower than running both the speech model and the waveform decoder on the GPU. Real-time factor (RTF) is generation time divided by audio length, for one short sentence with the Linux GPU wheel on an RTX 6000 Ada (default decoder, 8 CPU threads); lower is faster.
 
-- **Waveform decoder on the CPU.** This is the default (`decoder_device="cpu"`), because the published decoders are prepared for the CPU, and it is the only choice on compute capability 6.1 (GTX 10xx), where the PyTorch CUDA build has no GPU code. The speech model still runs on the GPU, but the decoder becomes the slowest step. Tesla T4: decoder 5.0 s on the CPU against 0.2 s on the GPU, real-time factor 1.23 against 0.31 (speech model 1.5 s and 1.4 s). GTX 1080 Ti: speech model 1.4 s and decoder 5.0 s, real-time factor 1.18; with everything on the CPU the speech model alone takes 36 s (real-time factor 7.9).
-- **Speech model only partly on the GPU** (`gpu_layers` below 29 with `allow_hybrid=True`): the layers left on the CPU run at CPU speed. GTX 1080 Ti with `gpu_layers=14`: speech model 16.4 s, against 1.4 s with every layer on the GPU and 36 s on the CPU (real-time factor 4.1). Use it only when the whole model does not fit in GPU memory.
-- **Cards that run the portable code** (cards newer than 8.0 without compiled code in the wheel, for example H100): the driver compiles the 8.0 code when the model first loads, and the card then runs code made for 8.0, not for its own architecture. This costs speed on every call, not only at the start. An RTX PRO 6000 forced onto the portable code (`CUDA_FORCE_PTX_JIT=1`) ran the speech model 5 to 8 times slower per token in two runs: 19.2 and 18.9 ms per token on the second call (about 52 tokens per second) against 3.7 ms (272 tokens per second) with its compiled 12.0 code, and 16.3 and 18.7 ms against 2.4 ms on the first call. With CPU sampling included, the speech model took 3.0 and 2.8 s against 1.1 s on the second call. Loading took about as long as with the compiled code. These numbers come from a shared machine (load average 26-33, decoder `student_w4`), unlike the others in this section, and nothing was measured on an H100. On 8.0 cards (A100, A30) the compiled result is code for their own architecture, so only the first load can be slower (not measured). For full speed on a card without compiled code, build the package from source with its architecture, for example `KITTEN_CUDA_ARCHITECTURES=90-real` for an H100 (see [Building](#building)).
+- **Waveform decoder on the CPU** (`decoder_device="cpu"`, the default, because the published decoders are prepared for the CPU): the decoder becomes the slowest step. RTF 0.48 against 0.12 with the decoder on the GPU. It is the only choice on compute capability 6.1 (GTX 10xx).
+- **Speech model only partly on the GPU** (`gpu_layers` below 29 with `allow_hybrid=True`): the layers left on the CPU run at CPU speed. Use it only when the whole model does not fit in GPU memory.
+- **Cards without compiled code** (for example H100): they run the portable 8.0 code, which is slower on every call. For full speed, build the package from source for your card, for example `KITTEN_CUDA_ARCHITECTURES=90-real` (see [Building](#building)).
+- **CPU only** (`gpu_layers=0`): RTF 3.41 on the same machine.
+
 
