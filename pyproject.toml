@@ -2,7 +2,7 @@
 name = "llama-cpp-scripts"
 description = "Scripts that ship with llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
-version = "0.0.0"
+version = "0.1.0"
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
