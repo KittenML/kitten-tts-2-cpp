@@ -90,7 +90,7 @@ class CMakeBuild(build_ext):
 
 
 setup(
-    name='kitten-tts-cpp', version='0.1.0',
+    name='kitten-tts-cpp', version='0.2.0',
     description='CPU KittenTTS2 inference with native C++ bindings',
     long_description=(ROOT / 'README.md').read_text(), long_description_content_type='text/markdown',
     author='KittenML', url='https://github.com/KittenML/kitten-tts-2-cpp',
