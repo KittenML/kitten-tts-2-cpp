@@ -296,6 +296,9 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-col2im-1d.cpp)
 endif()
 
+# GPU load-time TQ2_1 -> Q2_0 repack; needs a model file, so not run by ctest: test-tq2_1-load model-tq2_1.gguf
+llama_build(test-tq2_1-load.cpp)
+
 # libmtmd
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)

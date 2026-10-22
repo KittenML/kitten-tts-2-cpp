@@ -1,4 +1,8 @@
-"""Build the KittenTTS2 CPU extension with CMake during package installation."""
+"""Build the KittenTTS2 extension with CMake during package installation.
+
+KITTEN_CUDA=1 builds the CUDA package, kitten-tts-cpp-cu<N>, against the CUDA build of torch installed for the
+build; N is that torch's CUDA major version.
+"""
 import os
 import importlib.util
 import importlib.metadata
@@ -14,6 +18,16 @@ from setuptools.command.build_ext import build_ext
 
 ROOT = Path(__file__).resolve().parent
 TORCH_VERSION = importlib.metadata.version('torch').split('+')[0]
+CUDA = os.environ.get('KITTEN_CUDA', '0') == '1'
+if CUDA:
+    import torch
+    CUDA_MAJOR = (torch.version.cuda or '12').split('.')[0]  # a CPU-only torch is rejected in build_extension
+else:
+    CUDA_MAJOR = None
+# Real cubins: 6.1 Pascal (CUDA 12 only; CUDA 13 cannot compile for it), 7.5 Turing, 8.6 Ampere, 8.9 Ada, 12.0 Blackwell.
+# 8.0 PTX lets other cards from 8.0 up (for example A100, H100) compile the kernels at first start.
+CUDA_ARCHITECTURES = os.environ.get('KITTEN_CUDA_ARCHITECTURES',
+                                    ('61-real;' if CUDA_MAJOR == '12' else '') + '75-real;80-virtual;86-real;89-real;120a-real')
 
 
 class CMakeBuild(build_ext):
@@ -30,6 +44,9 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         import torch
+        if CUDA and torch.version.cuda is None:
+            raise RuntimeError(f'KITTEN_CUDA=1 needs a CUDA build of torch=={TORCH_VERSION}; '
+                               'packaging/prepare_wheel.py installs the one the release wheels use')
         if not (ROOT / 'vendor/kitten-text-processing/CMakeLists.txt').is_file():
             raise RuntimeError('Initialize vendor/kitten-text-processing with git submodule update --init before installing')
         output = Path(self.get_ext_fullpath(ext.name)).resolve().parent
@@ -49,12 +66,17 @@ class CMakeBuild(build_ext):
             '-DLLAMA_BUILD_KITTEN_TTS=ON', '-DKITTEN_BUILD_PYTHON=ON',
             '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_BUILD_EXAMPLES=OFF',
             '-DLLAMA_BUILD_SERVER=OFF', '-DLLAMA_BUILD_MTMD=OFF', '-DLLAMA_BUILD_APP=OFF',
-            '-DGGML_CUDA=OFF', '-DGGML_METAL=OFF', '-DGGML_BACKEND_DL=OFF',
+            f'-DGGML_CUDA={"ON" if CUDA else "OFF"}', '-DGGML_METAL=OFF', '-DGGML_BACKEND_DL=OFF',
             '-DGGML_NATIVE=ON', '-DLLAMA_OPENSSL=ON',
             f'-DPython3_EXECUTABLE={sys.executable}',
             f'-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}',
             f'-DKITTEN_PYTHON_OUTPUT_DIR={output}',
         ]
+        if CUDA:
+            # GGML_CUDA_NO_VMM: no link to the driver library, so the wheel also imports and runs on the CPU
+            # on machines without an NVIDIA driver. The CUDA runtime and cuBLAS come from torch's dependencies.
+            # NCCL is only for multi-GPU splits, which the engine does not use; a system NCCL would be bundled.
+            args += ['-DGGML_CUDA_NO_VMM=ON', '-DGGML_CUDA_NCCL=OFF', f'-DCMAKE_CUDA_ARCHITECTURES={CUDA_ARCHITECTURES}']
         if (Path(sys.base_prefix) / 'include/openssl/ssl.h').is_file():
             args.append(f'-DOPENSSL_ROOT_DIR={sys.base_prefix}')
         args += shlex.split(os.environ.get('CMAKE_ARGS', ''))
@@ -72,9 +94,16 @@ class CMakeBuild(build_ext):
         if not (data / 'en/tagger.fst').is_file():
             raise RuntimeError('Native normalizer grammar data was not generated')
         shutil.copytree(data, output / 'data', dirs_exist_ok=True)
-        (output / '_build_info.json').write_text(json.dumps({
-            'torch_version': TORCH_VERSION, 'portable': portable,
-        }, indent=2) + '\n')
+        info = {'torch_version': TORCH_VERSION, 'portable': portable, 'cuda': CUDA}
+        if CUDA:
+            cache = (build / 'CMakeCache.txt').read_text(errors='replace')
+            nvcc = next(line.split('=', 1)[1] for line in cache.splitlines() if line.startswith('CMAKE_CUDA_COMPILER:'))
+            version = subprocess.run([nvcc, '--version'], check=True, capture_output=True, text=True).stdout
+            release = next(line for line in version.splitlines() if 'release' in line)  # "..., release X.Y, VX.Y.Z"
+            toolkit = release.rsplit(',', 1)[-1].strip().lstrip('V')
+            info.update({'cuda_runtime': torch.version.cuda, 'cuda_toolkit': toolkit,
+                         'cuda_architectures': CUDA_ARCHITECTURES})
+        (output / '_build_info.json').write_text(json.dumps(info, indent=2) + '\n')
         licenses = output / 'licenses'
         licenses.mkdir(exist_ok=True)
         for relative in ('LICENSE', 'tools/kitten-tts/LICENSE-KITTENTTS',
@@ -90,8 +119,9 @@ class CMakeBuild(build_ext):
 
 
 setup(
-    name='kitten-tts-cpp', version='0.2.0',
-    description='CPU KittenTTS2 inference with native C++ bindings',
+    name=f'kitten-tts-cpp-cu{CUDA_MAJOR}' if CUDA else 'kitten-tts-cpp', version='0.2.0',
+    description=(f'KittenTTS2 inference with native C++ bindings, NVIDIA GPU (CUDA {CUDA_MAJOR}) build' if CUDA
+                 else 'CPU KittenTTS2 inference with native C++ bindings'),
     long_description=(ROOT / 'README.md').read_text(), long_description_content_type='text/markdown',
     author='KittenML', url='https://github.com/KittenML/kitten-tts-2-cpp',
     python_requires='>=3.10',

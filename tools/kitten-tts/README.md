@@ -1,9 +1,12 @@
-# KittenTTS2 CPU inference
+# KittenTTS2 CPU and CUDA inference
 
 This is a local fork of DeepGrove's llama.cpp with a native C++ KittenTTS2 runner.
-The speech LM runs in llama.cpp/GGML on CPU. Text normalization uses the pinned
+The speech LM runs in llama.cpp/GGML on CPU, or on an NVIDIA GPU in a CUDA build
+(see [GPU (CUDA) build](#gpu-cuda-build)). Text normalization uses the pinned
 `vendor/kitten-text-processing` submodule. The S3 waveform decoder runs through
-CPU LibTorch, exported from the supplied KittenTTS Python package. No Python
+LibTorch on the CPU, or on an NVIDIA GPU with a locally exported CUDA decoder
+(see [CUDA waveform decoder](#cuda-waveform-decoder-optional-local-export)). It is
+exported from the supplied KittenTTS Python package. No Python
 interpreter or subprocess is used during synthesis. Only KITTEN2 checkpoints
 are accepted.
 
@@ -70,15 +73,15 @@ python tools/kitten-tts/export.py \
 ```
 
 This writes `model-tq2_1.gguf`, `decoder.pt`, `voices.json`, `config.json`,
-and a decoder parity report. All 38 built-in voices in the current checkpoint
-are exported, including their speaker projections and S3 reference conditioning.
+and a decoder parity report. All built-in voices in the checkpoint are exported,
+including their speaker projections and S3 reference conditioning.
 `--stage lm` and `--stage decoder` can be run independently.
 
 The checkpoint contains folded ternary weights with 128-element scale groups. The default `--outtype tq2_1` preserves them with this fork's `TQ2_1` GGUF extension (tensor type 43, file type 42). Each 68-byte block stores 256 weights: 64 packed bytes followed by two FP16 scales. Bytes 0-31 encode the first 128 weights; bytes 32-63 encode the second 128. In each group, byte `m` stores values `m`, `m+32`, `m+64`, and `m+96` in consecutive two-bit fields. Codes 0, 1, and 2 mean -1, 0, and +1. Code 3 is invalid.
 
 The exporter verifies exact reconstruction and rejects non-ternary matrices or scales that cannot be stored exactly in FP16. Embeddings and the tied output head remain FP16; one-dimensional tensors remain FP32. The model is 1.03 GB, versus 1.45 GB for the previous Q4_0 export and 3.47 GB for FP16. Packed transformer storage is 53% smaller than Q4_0; total model savings are 29% because other tensors are unchanged.
 
-This extension is CPU-only and requires this fork. Standard `TQ2_0` uses one scale per 256 weights and cannot preserve the checkpoint's two scales. `TQ2_1` has an AVX2 dot-product kernel with optional VNNI instructions and a portable scalar fallback. The compact kernels use Q8_K activations, so lossless weight storage does not imply identical logits or sampled audio.
+This extension requires this fork, and only the CPU has TQ2_1 kernels; GPU builds repack it to Q2_0 (see [GPU (CUDA) build](#gpu-cuda-build)). Standard `TQ2_0` uses one scale per 256 weights and cannot preserve the checkpoint's two scales. `TQ2_1` has an AVX2 dot-product kernel with optional VNNI instructions and a portable scalar fallback. The compact kernels use Q8_K activations, so lossless weight storage does not imply identical logits or sampled audio.
 
 On supported Intel AMX builds, two-dimensional TQ2_1 matrices are expanded losslessly into the existing AMX Q4_0 layout at load time. This reuses the optimized prompt and single-token matrix kernels with Q8_0 activations. The original two FP16 scales are copied to their corresponding 32-weight blocks; no weight rounding is introduced. The file format and 1.03 GB GGUF remain unchanged. Runtime transformer-weight storage is about 756 MiB instead of 357 MiB, with temporary conversion buffers and mapped file pages also contributing to peak memory.
 
@@ -108,6 +111,46 @@ flow. `student_w8` is also accepted. The exported student uses LibTorch FP32
 operators over the reconstructed quantized weights; it is not an integer-only
 vocoder.
 
+## CUDA waveform decoder (optional, local export)
+
+The published `decoder.pt` files run on the CPU. To run the S3 decoder on the GPU too, build against the CUDA build of LibTorch and export a CUDA decoder locally (CUDA decoders are not published):
+
+```sh
+python -m venv venv-cuda
+venv-cuda/bin/pip install torch==2.13.0+cu129 --index-url https://download.pytorch.org/whl/cu129
+cmake -S . -B build-cuda \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+  -DGGML_CUDA=ON -DGGML_METAL=OFF \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc \
+  -DCMAKE_CUDA_ARCHITECTURES='75-real;86-real;89-real;120a-real' \
+  -DLLAMA_BUILD_KITTEN_TTS=ON \
+  -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DCMAKE_PREFIX_PATH="$(venv-cuda/bin/python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+cmake --build build-cuda --target kitten-tts -j 8
+```
+
+Then export the decoder on a machine with a GPU, in a separate environment with torch 2.11: the export needs torchaudio, which has no release for torch 2.13. The runtime loads the exported decoder with its own LibTorch. `../kitten-tts-2` is a local copy of the model repository and `../KittenTTS` a clone of [KittenTTS](https://github.com/KittenML/KittenTTS).
+
+```sh
+git clone https://github.com/KittenML/KittenTTS ../KittenTTS
+python -m venv venv-export
+venv-export/bin/pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+venv-export/bin/pip install ../KittenTTS
+venv-export/bin/hf download KittenML/kitten-tts-2 --local-dir ../kitten-tts-2
+venv-export/bin/python tools/kitten-tts/export.py \
+  --repo ../kitten-tts-2 --python-package ../KittenTTS \
+  --output models/kitten2-cuda --stage decoder --device cuda \
+  --reuse-voices ../kitten-tts-2/cpp/default/voices.json
+build-cuda/bin/kitten-tts --assets models/kitten2-cuda --model ../kitten-tts-2/cpp/model-tq2_1.gguf \
+  --gpu-layers 99 --decoder-device cuda --text 'Hello.' --output hello.wav
+```
+
+- `--reuse-voices` keeps the published voice conditioning.
+- `--rng device` (default) draws the decoder noise on the GPU, so a seed gives different, equally valid audio than the CPU decoder. `--rng cpu` reproduces the CPU decoder's noise; it works only with `--decoder default`.
+- The runtime refuses a decoder exported for the other device. The export uses `cuda:0`; select the GPU with `CUDA_VISIBLE_DEVICES`.
+- A CUDA decoder takes about 6 s to load.
+
 ## Synthesize
 
 ```sh
@@ -131,6 +174,47 @@ contains the final iteration, while stdout includes every iteration. Decoder JIT
 warmup affects the first two iterations. RTF is synthesis time divided by audio
 duration and excludes loading and initial text normalization. An RTF below 1
 means synthesis is faster than playback. `--decoder-threads` tunes S3 separately.
+
+## GPU (CUDA) build
+
+The speech LM can run on an NVIDIA GPU through llama.cpp's CUDA backend. Build with the CUDA 12.8 toolkit:
+
+```sh
+cmake -S . -B build-cuda \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+  -DGGML_CUDA=ON -DGGML_METAL=OFF \
+  -DCMAKE_CUDA_ARCHITECTURES='75-real;86-real;89-real;120a-real' \
+  -DLLAMA_BUILD_KITTEN_TTS=ON \
+  -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+cmake --build build-cuda --target kitten-tts -j 8
+build-cuda/bin/kitten-tts --gpu-layers 99 --timings \
+  --text 'Hello from the GPU.' --output gpu.wav
+```
+
+This build keeps the decoder on the CPU; to run it on the GPU as well, use the build in [CUDA waveform decoder](#cuda-waveform-decoder-optional-local-export). `CMAKE_CUDA_ARCHITECTURES` lists the GPU generations compiled in: 75 (GTX 16xx, RTX 20xx, T4), 86 (RTX 30xx), 89 (RTX 40xx, L4) and 120a (RTX 50xx). Other cards stop with "no kernel image is available"; add theirs, for example `80-real` (A100), `90-real` (H100) or `61-real` (GTX 10xx, whose decoder stays on the CPU).
+
+- `--gpu-layers N|all` (default 0): `99` or `all` puts the whole LM on the GPU. 0 keeps the CPU path and its output unchanged.
+- `--decoder-device cpu|cuda` (default `cpu`): `cuda` needs a CUDA-exported decoder.
+- `--main-gpu N` (default 0) and `--flash-attn auto|on|off` (default `auto`).
+- `--allow-hybrid`: accept an LM that is only partly on the GPU (`--gpu-layers` below 29). Without it the runtime stops with an error.
+
+The ternary weights are repacked losslessly to the GPU's Q2_0 format at load time. Text processing, the token embedding lookup, sampling and WAV writing stay on the CPU. GPU and CPU builds compute with slightly different precision, so the same seed can give different audio.
+
+Speed on an RTX 4090 (real-time factor: synthesis time divided by audio length; lower is faster):
+
+| Setup | RTF | GPU memory |
+|---|---:|---:|
+| `--gpu-layers 99 --decoder-device cuda` (recommended) | 0.15 | 2.2-2.9 GB |
+| `--gpu-layers 99`, decoder on the CPU | 0.41 | 1.7 GB |
+| CPU only | 1.28 | none |
+
+The other setups are supported but not the fastest, because part of the work stays on the CPU: the CPU decoder becomes the slowest stage, and with `--allow-hybrid` the layers left on the CPU run at CPU speed (use it only when the LM does not fit in GPU memory).
+
+`--timings` prints per-stage times, tokens per second, RTF and peak GPU memory. The report's `lm` object shows where the LM ran (`"placement"`: `cpu`, `gpu` or `hybrid`), and the runtime warns if an operation falls back to the CPU.
+
+Streaming and runtime voice cloning are not supported on either device.
 
 ## Prepare a cloned voice
 
@@ -201,7 +285,18 @@ python tools/kitten-tts/test_tq2.py
 build/bin/test-backend-ops test -b CPU -o MUL_MAT,GET_ROWS -p tq2_1
 ```
 
-Configure with `-DLLAMA_BUILD_TESTS=ON` first. The Python byte-layout check uses the Linux library in `build/bin`. The dedicated native test checks exact reconstruction and the dot product against dequantized Q8_K activations. Native VNNI, AVX2 without VNNI, and a build with AVX disabled passed locally.
+Configure with `-DLLAMA_BUILD_TESTS=ON` first. The Python byte-layout check uses the Linux library in `build/bin`. The dedicated native test checks exact reconstruction and the dot product against dequantized Q8_K activations. It also checks the TQ2_1 to Q2_0 repack element by element. Native VNNI, AVX2 without VNNI, and a build with AVX disabled passed locally.
+
+For a CUDA build (`build-cuda`, configured with `-DLLAMA_BUILD_TESTS=ON`):
+
+```sh
+cmake --build build-cuda --target test-tq2_1 test-tq2_1-load test-backend-ops -j 8
+ctest --test-dir build-cuda -R 'test-tq2_1$' --output-on-failure
+build-cuda/bin/test-backend-ops test -b CUDA0 -o MUL_MAT,GET_ROWS -p q2_0
+build-cuda/bin/test-tq2_1-load ../kitten-tts-2/cpp/model-tq2_1.gguf
+```
+
+`test-tq2_1-load` needs the model file, so ctest does not run it. It checks that every TQ2_1 weight loads on the GPU as Q2_0 with the same values as the file.
 
 The optional CTest frontend check can be enabled with
 `-DKITTEN_REFERENCE_PACKAGE=/path/to/KittenTTS` and

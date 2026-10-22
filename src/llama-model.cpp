@@ -1568,7 +1568,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
         std::vector<ggml_backend_buffer_ptr> bufs;
-        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft && !ml.has_repacked_tensors(ctx)) {
             GGML_ASSERT(!ml.no_alloc);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
@@ -2456,6 +2456,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.gpu_repack                  =*/ true,
     };
 
     return result;
@@ -2863,6 +2864,17 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int 
         return nullptr;
     }
     return model->devices[i].dev;
+}
+
+int32_t llama_model_n_tensors(const struct llama_model * model) {
+    return (int32_t)model->tensors_by_name.size();
+}
+
+const ggml_tensor * llama_model_get_tensor_by_index(const struct llama_model * model, int32_t i) {
+    if (i < 0 || i >= (int32_t)model->tensors_by_name.size()) {
+        return nullptr;
+    }
+    return model->tensors_by_name[i].second;
 }
 
 //

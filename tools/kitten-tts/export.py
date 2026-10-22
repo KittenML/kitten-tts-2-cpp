@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Export KittenTTS2 assets. Python is used only for conversion and validation."""
 import argparse
+import contextlib
 import json
 import pathlib
 import sys
@@ -34,7 +35,18 @@ def main():
     p.add_argument('--stage', choices=['lm', 'decoder', 'all'], default='all')
     p.add_argument('--threads', type=int, default=8)
     p.add_argument('--decoder', choices=['default','student_w4','student_w8'], default='default')
+    p.add_argument('--device', choices=['cpu', 'cuda'], default='cpu',
+                   help='device to trace the decoder on; a CUDA decoder runs only with --decoder-device cuda')
+    p.add_argument('--rng', choices=['device', 'cpu'], default='device',
+                   help='cpu: draw decoder noise from the CPU generator and copy it to the device, '
+                        'so one seed gives the same noise as a CPU decoder (for parity checks)')
+    p.add_argument('--reuse-voices', type=pathlib.Path,
+                   help='prepared voices.json to keep (for example the published cpp/<decoder>/voices.json) '
+                        'instead of recomputing speaker projections and S3 conditioning')
     a = p.parse_args()
+    if a.rng == 'cpu' and a.decoder != 'default':
+        # student_w4 fails the trace self-check with CPU-drawn noise (max error 4.6e-4 > 2e-4); student_w8 is not checked
+        p.error('--rng cpu is supported only with --decoder default; use --rng device for student decoders')
     sys.path.insert(0, str(a.python_package))
     import torch
     torch.set_num_threads(a.threads)
@@ -93,9 +105,7 @@ def main():
 
 
 def export_decoder(a, config):
-    import numpy as np
     import torch
-    from safetensors import safe_open
     from kittenml.kittentts2.vocoder import S3Codec
     from kittenml.kittentts2 import s3gen
     # The reference .item() freezes sequence length when tracing. This equivalent
@@ -106,7 +116,11 @@ def export_decoder(a, config):
     s3gen.make_pad_mask = make_pad_mask
     s3gen.tqdm = lambda iterable, **kwargs: iterable
     student_weights = None if a.decoder == 'default' else a.repo / config['decoders'][a.decoder]
-    codec = S3Codec(device='cpu', student_weights=student_weights)
+    if a.device == 'cuda':
+        # Match the CPU decoder: FP32 GEMMs and convolutions without TF32.
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+    codec = S3Codec(device=a.device, student_weights=student_weights)
     from kittenml.kittentts2 import student_flow
     student_flow.make_pad_mask = make_pad_mask
     class Decoder(torch.nn.Module):
@@ -116,18 +130,89 @@ def export_decoder(a, config):
             self.hift = codec.s3gen.mel2wav
             self.register_buffer('fade', codec.s3gen.trim_fade)
         def forward(self, tokens, prompt_token, prompt_feat, embedding):
-            lengths = torch.ones(1, dtype=torch.long) * tokens.shape[1]
-            prompt_lengths = torch.ones(1, dtype=torch.long) * prompt_token.shape[1]
+            lengths = torch.ones(1, dtype=torch.long, device=tokens.device) * tokens.shape[1]
+            prompt_lengths = torch.ones(1, dtype=torch.long, device=tokens.device) * prompt_token.shape[1]
             if codec.student is None:
-                noise = torch.randn(1, 80, tokens.shape[1] * 2)
+                rng_device = 'cpu' if a.rng == 'cpu' else tokens.device
+                noise = torch.randn(1, 80, tokens.shape[1] * 2, device=rng_device).to(tokens.device)
                 mel, _ = self.flow.inference(tokens, lengths, prompt_token, prompt_lengths,
                     prompt_feat, None, embedding, True, n_timesteps=2, noised_mels=noise, meanflow=True)
             else:
                 mel, _, _ = student_flow.meanflow_forward(self.flow, tokens, lengths,
                     prompt_token, prompt_lengths, prompt_feat, embedding, n_steps=1)
-            wav, _ = self.hift.inference(mel, torch.zeros(1, 1, 0))
+            wav, _ = self.hift.inference(mel, torch.zeros(1, 1, 0, device=tokens.device))
             wav[:, :self.fade.shape[0]] *= self.fade
             return wav
+    if a.reuse_voices:
+        export_voices = json.loads(a.reuse_voices.read_text())
+        voice = next(iter(export_voices.values()))
+        args = (torch.full((1, 53), 4299, dtype=torch.long), torch.tensor(voice['prompt_token'], dtype=torch.long),
+                torch.tensor(voice['prompt_feat'], dtype=torch.float32), torch.tensor(voice['embedding'], dtype=torch.float32))
+        print('Reusing', len(export_voices), 'voices from', a.reuse_voices, flush=True)
+    else:
+        export_voices, args = export_conditioning(a, config, codec)
+    (a.output / 'voices.json').write_text(json.dumps(export_voices))
+    args = tuple(x.to(a.device) for x in args)
+    decoder = Decoder().eval()
+    metadata = dict(device=a.device, rng=a.rng, decoder=a.decoder, torch=torch.__version__, sinegen='device')
+    with torch.inference_mode(), rng_on_cpu(a.rng == 'cpu'), sinegen_on_device(s3gen):
+        traced = torch.jit.trace(decoder, args, check_trace=False)
+        traced = torch.jit.freeze(traced)
+        traced.save(str(a.output / 'decoder.pending.pt'), _extra_files={'kitten_decoder.json': json.dumps(metadata)})
+        results = []
+        for n in [4, 17, 53, 101]:
+            inputs = (torch.full((1, n), 4299, dtype=torch.long, device=a.device), *args[1:])
+            torch.manual_seed(123)
+            expected = decoder(*inputs)
+            torch.manual_seed(123)
+            actual = traced(*inputs)
+            torch.testing.assert_close(actual, expected, atol=2e-4, rtol=2e-4)
+            results.append(dict(tokens=n, samples=actual.numel(), max_error=float((actual-expected).abs().max())))
+        (a.output / 'decoder.pending.pt').replace(a.output / 'decoder.pt')
+        (a.output / 'decoder-parity.json').write_text(json.dumps(dict(metadata, results=results), indent=2))
+        print(results)
+
+
+@contextlib.contextmanager
+def rng_on_cpu(enabled):
+    """Trace randn_like as a CPU draw copied to the tensor's device, so a CUDA decoder uses the same noise as the CPU decoder for one seed.
+
+    The CPU and CUDA generators give different numbers for one seed. The torch.rand calls in s3gen already use CPU tensors."""
+    import torch
+    saved = torch.randn_like
+    if enabled:
+        torch.randn_like = lambda x, **kw: saved(x, **dict(kw, device='cpu')).to(x.device)
+    try:
+        yield
+    finally:
+        torch.randn_like = saved
+
+
+@contextlib.contextmanager
+def sinegen_on_device(s3gen):
+    """Create SineGen's harmonic buffer (9 floats per output sample) on f0's device.
+
+    The reference creates it with torch.zeros on the CPU and copies it to f0's device on every call. The values are the same."""
+    import torch
+    forward = s3gen.SineGen.forward
+    def patched(self, f0):
+        zeros = torch.zeros
+        torch.zeros = lambda *args, **kw: zeros(*args, **{'device': f0.device, **kw})
+        try:
+            return forward(self, f0)
+        finally:
+            torch.zeros = zeros
+    s3gen.SineGen.forward = patched
+    try:
+        yield
+    finally:
+        s3gen.SineGen.forward = forward
+
+
+def export_conditioning(a, config, codec):
+    import numpy as np
+    import torch
+    from safetensors import safe_open
     voices_path = a.repo / config['voices']
     voices = json.loads(voices_path.read_text())
     head = {}
@@ -154,24 +239,7 @@ def export_decoder(a, config):
         args = (torch.full((1, 53), 4299, dtype=torch.long), cond['prompt_token'].long(),
                 cond['prompt_feat'].float(), cond['embedding'].float())
         print('Exported voice', name, flush=True)
-    (a.output / 'voices.json').write_text(json.dumps(export_voices))
-    decoder = Decoder().eval()
-    with torch.inference_mode():
-        traced = torch.jit.trace(decoder, args, check_trace=False)
-        traced = torch.jit.freeze(traced)
-        traced.save(str(a.output / 'decoder.pending.pt'))
-        results = []
-        for n in [4, 17, 53, 101]:
-            inputs = (torch.full((1, n), 4299, dtype=torch.long), *args[1:])
-            torch.manual_seed(123)
-            expected = decoder(*inputs)
-            torch.manual_seed(123)
-            actual = traced(*inputs)
-            torch.testing.assert_close(actual, expected, atol=2e-4, rtol=2e-4)
-            results.append(dict(tokens=n, samples=actual.numel(), max_error=float((actual-expected).abs().max())))
-        (a.output / 'decoder.pending.pt').replace(a.output / 'decoder.pt')
-        (a.output / 'decoder-parity.json').write_text(json.dumps(results, indent=2))
-        print(results)
+    return export_voices, args
 
 
 if __name__ == '__main__':

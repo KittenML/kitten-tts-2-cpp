@@ -4,6 +4,7 @@ import numbers
 import os
 from pathlib import Path
 import queue
+import sys
 import threading
 
 import numpy as np
@@ -11,10 +12,27 @@ import certifi
 import torch  # Load LibTorch's shared dependencies before the extension.
 
 _build_info = Path(__file__).with_name('_build_info.json')
-if _build_info.is_file():
-    _required_torch = json.loads(_build_info.read_text())['torch_version']
+_info = json.loads(_build_info.read_text()) if _build_info.is_file() else {}
+if _info:
+    _required_torch = _info['torch_version']
     if torch.__version__.split('+')[0] != _required_torch:
         raise ImportError(f'This kitten-tts-cpp wheel requires torch=={_required_torch}; install that version or rebuild from source')
+    if _info.get('cuda'):
+        # The extension uses the CUDA runtime and cuBLAS that a CUDA build of torch installs.
+        _major = _info.get('cuda_runtime', '12').split('.')[0]
+        _package = f'kitten-tts-cpp-cu{_major}'
+        _index = 'cu' + _info.get('cuda_runtime', f'{_major}.0').replace('.', '')
+        _install = (f'pip install torch=={_required_torch} --index-url https://download.pytorch.org/whl/{_index}, '
+                    'or use the CPU package kitten-tts-cpp')
+        if torch.version.cuda is None:
+            raise ImportError(f'{_package} needs a CUDA {_major} build of torch=={_required_torch}, but the installed '
+                              f'torch {torch.__version__} is CPU-only. Install the CUDA build with {_install}')
+        if torch.version.cuda.split('.')[0] != _major:
+            raise ImportError(f'{_package} needs a CUDA {_major} build of torch=={_required_torch}, but the installed '
+                              f'torch {torch.__version__} uses CUDA {torch.version.cuda}. Install the CUDA {_major} build with {_install}')
+if sys.platform == 'win32':
+    # LibTorch's DLLs, and for a CUDA torch the CUDA runtime and cuBLAS, are in torch/lib.
+    _dll_directory = os.add_dll_directory(str(Path(torch.__file__).parent / 'lib'))
 
 from . import _native
 
@@ -43,18 +61,28 @@ def _finite(name, value):
 
 
 class KittenTTS2:
-    """Persistent CPU model. Uses the same native engine as the kitten-tts CLI.
+    """Persistent model. Uses the same native engine as the kitten-tts CLI.
 
     model_name is a Hugging Face repository or a local native asset directory.
     Raw recording cloning and Python checkpoint weight formats are not supported.
+
+    The speech LM runs on the CPU by default. The CUDA package (kitten-tts-cpp-cu12 on Linux,
+    kitten-tts-cpp-cu13 on Windows) can run it on an NVIDIA GPU: gpu_layers=99 (or 'all') offloads
+    the whole LM, main_gpu selects the GPU, flash_attn is
+    'auto', 'on' or 'off', and allow_hybrid=True accepts weights left on the CPU when gpu_layers is
+    below 29. decoder_device='cuda' runs the waveform decoder on the GPU; it needs a decoder exported
+    for CUDA (a local asset directory), because the published decoders are traced on the CPU.
+    These options are checked like the CLI's --gpu-layers, --main-gpu, --flash-attn, --allow-hybrid
+    and --decoder-device. last_report['lm']['placement'] is 'cpu', 'gpu' or 'hybrid'.
     """
 
     def __init__(self, model_name='KittenML/kitten-tts-2', cache_dir=None,
                  device=None, hf_token=None, decoder=None, weights='packed', *,
                  threads=8, decoder_threads=None, revision=None, offline=False,
-                 model_path=None, data_dir=None, repack=True, ca_file=None):
+                 model_path=None, data_dir=None, repack=True, ca_file=None,
+                 gpu_layers=0, main_gpu=0, decoder_device='cpu', flash_attn='auto', allow_hybrid=False):
         if device not in (None, 'cpu', torch.device('cpu')):
-            raise ValueError('kitten-tts-cpp supports device="cpu" only')
+            raise ValueError('device must be None or "cpu"; use gpu_layers and decoder_device="cuda" for an NVIDIA GPU')
         if weights != 'packed':
             raise ValueError('Only weights="packed" is supported; use model_path for a custom GGUF')
         _integer('threads', threads, 1)
@@ -80,6 +108,13 @@ class KittenTTS2:
             args['--offline'] = '1'
         if not repack:
             args['--no-repack'] = '1'
+        if not isinstance(allow_hybrid, bool):
+            raise ValueError('allow_hybrid must be a boolean')
+        # Passed as text, so the native engine checks the values with the CLI's rules and messages.
+        args.update({'--gpu-layers': str(gpu_layers), '--main-gpu': str(main_gpu),
+                     '--decoder-device': str(decoder_device), '--flash-attn': str(flash_attn)})
+        if allow_hybrid:
+            args['--allow-hybrid'] = '1'
         self._streams_lock = threading.Lock()
         self._stops = set()
         self._lock = threading.RLock()
@@ -87,7 +122,9 @@ class KittenTTS2:
         metadata = json.loads(self._engine.metadata())
         self.config = metadata['config']
         self._voices = metadata['voices']
-        self.device = 'cpu'
+        self.placement = metadata.get('lm', {}).get('placement', 'cpu')
+        self.decoder_device = metadata.get('decoder_device', 'cpu')
+        self.device = 'cuda' if self.placement != 'cpu' or self.decoder_device == 'cuda' else 'cpu'
         self.decoder = decoder or self.config.get('cpp_decoder', self.config.get('default_decoder', 'default'))
         self.last_report = None
 

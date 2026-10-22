@@ -807,6 +807,10 @@ extern "C" {
 
     GGML_API bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbytes);
 
+    // lossless TQ2_1 -> Q2_0 repack; dst holds nrows*ggml_row_size(GGML_TYPE_Q2_0, n_per_row) bytes
+    // returns false if a code is 3 or n_per_row is not a multiple of 256
+    GGML_API bool ggml_repack_tq2_1_to_q2_0(const void * src, void * dst, int64_t nrows, int64_t n_per_row);
+
     // main
 
     GGML_API struct ggml_context * ggml_init (struct ggml_init_params params);
