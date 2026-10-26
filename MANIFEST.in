@@ -15,4 +15,4 @@ prune vendor/kitten-text-processing/dist
 prune vendor/kitten-text-processing/.venv
 global-exclude __pycache__ *.py[cod] *.so *.a *.o .git
 
-recursive-include packaging *.py *.md
+recursive-include packaging *.py *.md *.sh

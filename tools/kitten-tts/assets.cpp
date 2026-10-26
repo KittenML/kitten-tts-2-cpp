@@ -30,7 +30,7 @@ assets resolve_assets(const std::map<std::string, std::string> & args) {
     // Encode slashes in revision names so cache paths cannot collide.
     std::string cache_revision = revision;
     for (char & c : cache_revision) if (c == '/') c = '@';
-    fs::path root = local ? fs::path(args.at("--assets")) : fs::path(get("--cache-dir", env("XDG_CACHE_HOME", env("HOME", ".") + "/.cache") + "/kitten-tts")) / repo / cache_revision;
+    fs::path root = local ? fs::path(args.at("--assets")) : fs::path(get("--cache-dir", env("XDG_CACHE_HOME", env("HOME", env("USERPROFILE", ".")) + "/.cache") + "/kitten-tts")) / repo / cache_revision;
     common_download_opts opts;
     opts.offline = args.count("--offline");
     opts.bearer_token = get("--hf-token", env("HF_TOKEN"));
@@ -64,6 +64,10 @@ assets resolve_assets(const std::map<std::string, std::string> & args) {
     std::string name = get("--decoder", result.config.value("default_decoder", "default"));
     if (!cpp.at("decoders").contains(name)) throw std::runtime_error("unknown decoder: " + name);
     const auto & decoder = cpp.at("decoders").at(name);
+    // A TorchScript trace keeps the device it was exported on, so a CUDA decoder is a separate file.
+    const bool cuda = get("--decoder-device", "cpu") == "cuda";
+    if (need_decoder && cuda && !decoder.contains("torchscript_cuda"))
+        throw std::runtime_error("decoder " + name + " has no CUDA export in " + (local ? args.at("--assets") : repo) + "; use --decoder-device cpu, or a CUDA export via --assets");
     auto asset = [&](const json & entry) {
         auto path = fetch(entry.at("file").get<std::string>());
         if (fs::file_size(path) != entry.at("size").get<uint64_t>()) throw std::runtime_error("asset size mismatch; remove and download again: " + path);
@@ -71,7 +75,7 @@ assets resolve_assets(const std::map<std::string, std::string> & args) {
     };
     result.voices = asset(decoder.at("voices"));
     if (need_model) result.model = args.count("--model") ? args.at("--model") : asset(cpp.at("gguf"));
-    if (need_decoder) result.decoder = asset(decoder.at("torchscript"));
+    if (need_decoder) result.decoder = asset(decoder.at(cuda ? "torchscript_cuda" : "torchscript"));
     return result;
 }
 }

@@ -12,6 +12,9 @@ def main():
     parser.add_argument('--assets', type=Path, required=True, help='Default decoder export including model-tq2_1.gguf')
     parser.add_argument('--student-w4', type=Path)
     parser.add_argument('--student-w8', type=Path)
+    parser.add_argument('--cuda', type=Path, help='Default decoder exported with export.py --device cuda')
+    parser.add_argument('--student-w4-cuda', type=Path)
+    parser.add_argument('--student-w8-cuda', type=Path)
     args = parser.parse_args()
     config_path = args.repo / 'config.json'
     config = json.loads(config_path.read_text())
@@ -41,12 +44,28 @@ def main():
         for file in ('decoder.pt', 'voices.json'):
             if not (source / file).is_file():
                 raise ValueError(f'missing {source / file}')
+    cuda_sources = {name: path for name, path in (('default', args.cuda), ('student_w4', args.student_w4_cuda),
+                                                  ('student_w8', args.student_w8_cuda)) if path}
+    for name, source in cuda_sources.items():
+        if name not in sources:
+            raise ValueError(f'{source}: a CUDA export of {name} needs its CPU export too')
+        exported = json.loads((source / 'config.json').read_text())
+        if exported['type'] != 'KITTEN2' or exported.get('cpp_decoder', 'default') != name:
+            raise ValueError(f'{source}: wrong decoder export for {name}')
+        # Both devices share one voices.json: export the CUDA decoder with --reuse-voices.
+        if (source / 'voices.json').read_bytes() != (sources[name] / 'voices.json').read_bytes():
+            raise ValueError(f'{source}: voices.json differs from the CPU export; export with --reuse-voices')
+        if not (source / 'decoder.pt').is_file():
+            raise ValueError(f'missing {source / "decoder.pt"}')
     manifest = {'version': 1, 'gguf': copy(args.assets / 'model-tq2_1.gguf', 'cpp/model-tq2_1.gguf'), 'decoders': {}}
     for name, source in sources.items():
         manifest['decoders'][name] = {
             'torchscript': copy(source / 'decoder.pt', f'cpp/{name}/decoder.pt'),
             'voices': copy(source / 'voices.json', f'cpp/{name}/voices.json'),
         }
+        if name in cuda_sources:
+            manifest['decoders'][name]['torchscript_cuda'] = copy(cuda_sources[name] / 'decoder.pt',
+                                                                  f'cpp/{name}/decoder-cuda.pt')
     config['cpp'] = manifest
     temporary = config_path.with_suffix('.json.tmp')
     temporary.write_text(json.dumps(config, indent=2) + '\n')
