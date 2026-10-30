@@ -1091,6 +1091,33 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return it->second.get();
     };
 
+    // set by buft_for_tensor when the TQ2_1 weight is created as Q2_0 and repacked at load time
+    bool repack = false;
+
+    // use Q2_0 for a TQ2_1 weight if the GPU buffer type supports the op with Q2_0
+    auto try_repack_q2_0 = [&](ggml_tensor * t_meta, ggml_op op, ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) -> bool {
+        if (!gpu_repack || files.empty() || t_meta->type != GGML_TYPE_TQ2_1 || !dev || ggml_backend_buft_is_host(buft)) {
+            return false;
+        }
+        const auto dev_type = ggml_backend_dev_type(dev);
+        if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            return false;
+        }
+        ggml_tensor t_q2_0 = *t_meta;
+        t_q2_0.type = GGML_TYPE_Q2_0;
+        t_q2_0.nb[0] = ggml_type_size(GGML_TYPE_Q2_0);
+        t_q2_0.nb[1] = ggml_row_size(GGML_TYPE_Q2_0, t_q2_0.ne[0]);
+        for (int i = 2; i < GGML_MAX_DIMS; i++) {
+            t_q2_0.nb[i] = t_q2_0.nb[i - 1]*t_q2_0.ne[i - 1];
+        }
+        if (!weight_buft_supported(hparams, &t_q2_0, op, buft, dev)) {
+            return false;
+        }
+        *t_meta = t_q2_0;
+        repack = true;
+        return true;
+    };
+
     auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
         if (!t_meta) {
             if (flags & TENSOR_NOT_REQUIRED) {
@@ -1185,6 +1212,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                         }
                     } else {
                         buft = overrides->buft;
+                        auto * dev = ggml_backend_buft_get_device(buft);
+                        if (t_meta->type == GGML_TYPE_TQ2_1 && dev && !weight_buft_supported(hparams, t_meta, op, buft, dev)) {
+                            try_repack_q2_0(t_meta, op, dev, buft);
+                        }
                     }
 
                     LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
@@ -1200,6 +1231,18 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             buft = select_weight_buft(hparams, t_meta, op, buft_list);
             if (!buft) {
                 throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+            }
+            // the buffer types before buft do not support TQ2_1; use the first GPU one that supports Q2_0
+            if (t_meta->type == GGML_TYPE_TQ2_1) {
+                for (const auto & [cur_dev, cur_buft] : *buft_list) {
+                    if (cur_buft == buft) {
+                        break;
+                    }
+                    if (try_repack_q2_0(t_meta, op, cur_dev, cur_buft)) {
+                        buft = cur_buft;
+                        break;
+                    }
+                }
             }
         }
 
@@ -1278,6 +1321,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
     }
 
+    const size_t nbytes_file = ggml_nbytes(&t_meta);
+
     ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
     if (buft == nullptr) {
         return nullptr;
@@ -1298,10 +1343,18 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
     ggml_set_name(tensor, ggml_get_name(&t_meta));
 
+    // progress and the final unmap use file bytes
     if (duplicated) {
-        size_data += ggml_nbytes(&t_meta);
+        size_data += nbytes_file;
     } else {
         n_created++;
+    }
+
+    if (repack) {
+        auto & stats = repacked[ggml_backend_buft_name(buft)];
+        stats.n_tensors++;
+        stats.n_bytes_file += nbytes_file;
+        stats.n_bytes_repacked += ggml_nbytes(tensor);
     }
 
     return tensor;
@@ -1322,6 +1375,10 @@ void llama_model_loader::done_getting_tensors(bool partial) const {
         LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %zu others) cannot be used with preferred buffer type %s, using %s instead\n",
             __func__, first_tensor_moved_name.c_str(), first_tensor_moved_type_name.c_str(), n_tensors_moved - 1,
             ggml_backend_buft_name(first_moved_from_buft), ggml_backend_buft_name(first_moved_to_buft));
+    }
+    for (const auto & [buft_name, stats] : repacked) {
+        LLAMA_LOG_INFO("%s: %s has no TQ2_1 kernels: %zu TQ2_1 tensors (%.2f MiB) will be repacked to Q2_0 (%.2f MiB) at load time (lossless)\n",
+            __func__, buft_name.c_str(), stats.n_tensors, stats.n_bytes_file/1024.0/1024.0, stats.n_bytes_repacked/1024.0/1024.0);
     }
 }
 
@@ -1375,6 +1432,16 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
+bool llama_model_loader::has_repacked_tensors(ggml_context * ctx) const {
+    for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+        const auto * weight = get_weight(ggml_get_name(tensor));
+        if (weight && weight->tensor->type != tensor->type) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
@@ -1413,7 +1480,11 @@ bool llama_model_loader::load_all_data(
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
     std::vector<no_init<uint8_t>> read_buf;
+    std::vector<no_init<uint8_t>> repack_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
+    size_t  n_repacked  = 0;
+    int64_t t_repack_us = 0;
+    const char * repack_buf_name = nullptr;
 
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
@@ -1527,6 +1598,37 @@ bool llama_model_loader::load_all_data(
         }
 
         size_t n_size = ggml_nbytes(cur);
+
+        if (cur->type != weight->tensor->type) {
+            // TQ2_1 in the file, Q2_0 in a GPU buffer (see create_tensor)
+            GGML_ASSERT(cur->type == GGML_TYPE_Q2_0 && weight->tensor->type == GGML_TYPE_TQ2_1);
+            GGML_ASSERT(cur->buffer != nullptr && cur->data != nullptr);
+            const size_t n_size_file = ggml_nbytes(weight->tensor);
+            const uint8_t * src = nullptr;
+            if (use_mmap) {
+                src = (const uint8_t *) mappings.at(weight->idx)->addr() + weight->offs;
+            } else {
+                const auto & file = files.at(weight->idx);
+                read_buf.resize(n_size_file);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(read_buf.data(), n_size_file);
+                src = (const uint8_t *) read_buf.data();
+            }
+            if (check_tensors && !ggml_validate_row_data(weight->tensor->type, src, n_size_file)) {
+                throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+            }
+            const int64_t t_start_us = ggml_time_us();
+            repack_buf.resize(n_size);
+            if (!ggml_repack_tq2_1_to_q2_0(src, repack_buf.data(), ggml_nrows(weight->tensor), weight->tensor->ne[0])) {
+                throw std::runtime_error(format("tensor '%s' has invalid TQ2_1 data (code 3), cannot repack it to Q2_0", ggml_get_name(cur)));
+            }
+            t_repack_us += ggml_time_us() - t_start_us;
+            n_repacked++;
+            repack_buf_name = ggml_backend_buffer_name(cur->buffer);
+            ggml_backend_tensor_set(cur, repack_buf.data(), 0, n_size);
+            size_done += n_size_file;
+            continue;
+        }
 
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
@@ -1645,6 +1747,10 @@ bool llama_model_loader::load_all_data(
         ggml_backend_buffer_free(buf);
     }
     ggml_backend_free(upload_backend);
+
+    if (n_repacked > 0) {
+        LLAMA_LOG_INFO("%s: repacked %zu TQ2_1 tensors to Q2_0 for %s in %.1f ms (lossless)\n", __func__, n_repacked, repack_buf_name, t_repack_us/1000.0);
+    }
 
     // check validation results
     bool validation_failed = false;

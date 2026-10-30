@@ -358,5 +358,108 @@
         ]
       }
     }
+  },
+  "cuda_release_validation": {
+    "date": "2026-10-24",
+    "source_head": "8e0f03f41ae920a708c3dc119f442448a86b9915",
+    "source_state": "HEAD plus the accompanying uncommitted PR-readiness changes",
+    "model_repository": "KittenML/kitten-tts-2",
+    "model_revision": "c93cb7c271baa51d9ae8204d5277988906f235a2",
+    "python_reference_commit": "afd9dfda7ffdca35dd0151b149c221140c80ec3f",
+    "export_torch": "2.11.0+cu128",
+    "published_cuda_assets": [
+      {
+        "decoder": "default",
+        "bytes": 534311680,
+        "sha256": "dc0d9588b8e36183f7cb7969353081533b03fe46bfaf8a6040a609ebf3cd444f"
+      },
+      {
+        "decoder": "student_w4",
+        "bytes": 312339684,
+        "sha256": "7d815b39c27defc8f4d1007320436d7ccf36de9619ae17c1086f6845b42ac38e"
+      }
+    ],
+    "wheel_matrix": {
+      "python_versions": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "linux": {
+        "platform": "manylinux_2_34_x86_64",
+        "build_container": "quay.io/pypa/manylinux_2_34_x86_64@sha256:fb501b3bde5ee751f2f4897678c5a82359448efb278b1718e8d375efe874b75f",
+        "compiler_cuda": "12.8.93",
+        "torch": "2.13.0+cu129",
+        "gpu": "NVIDIA GeForce RTX 3090",
+        "driver": "595.104.02",
+        "tested_wheels": 5,
+        "real_cpu_synthesis_without_driver": "5/5 passed; compiler library paths removed"
+      },
+      "windows": {
+        "platform": "win_amd64, Windows Server 2022",
+        "compiler_cuda": "13.0.88",
+        "torch": "2.13.0+cu130",
+        "gpu": "NVIDIA L4",
+        "driver": "596.86",
+        "driver_model": "WDDM",
+        "tested_wheels": 5
+      },
+      "all_ten_wheels_passed": [
+        "Clean environment install, native import, ABI check, grammar, synthetic TorchScript and anonymous HTTPS",
+        "Real W4 CPU generation and GPU LM with CPU decoder",
+        "Published default and W4 CUDA decoders, online and offline, finite nonzero mono float32 audio at 24 kHz",
+        "Voice selection, file output, sentence streaming, cancellation and reuse, local assets",
+        "Missing W8 CUDA export, partial offload guard, hybrid opt-in, empty offline cache",
+        "CPU generation and clear GPU errors with CUDA_VISIBLE_DEVICES=-1",
+        "Archive integrity, correct CPython ABI, current README metadata and no bundled model weights"
+      ]
+    },
+    "source_and_publisher_checks": {
+      "readme_linux_cpu_and_cuda_builds": "passed with system OpenSSL; CUDA build also tested with CMake 3.28",
+      "cpu_sdist_install": "passed without Git or submodule network access",
+      "windows_native_cli": "default/W4 with CPU/CUDA decoder passed; cache resolution tests passed",
+      "incompatible_torch": "Linux and Windows reject Torch 2.12 and CPU-only Torch 2.13 with installation guidance",
+      "asset_cache": "cold/warm/offline, manifest upgrade, CUDA selection, size mismatch, USERPROFILE fallback passed",
+      "frontend_sampling_audio_join_cases": [
+        228,
+        12,
+        3
+      ],
+      "tq2_1_repack_cases": 436,
+      "fp16_scale_patterns": 65536,
+      "cuda_q2_0_mul_mat_cases": 69,
+      "cuda_q2_0_get_rows_cases": 4,
+      "weight_parity": {
+        "tensors": 310,
+        "types": {
+          "F16": 1,
+          "F32": 113,
+          "TQ2_1": 196
+        },
+        "max_error": 0.0
+      },
+      "published_cuda_decoder_parity_cases": 6,
+      "published_cuda_decoder_max_error": 2.980232238769531e-07,
+      "cuda_export_eager_trace_token_lengths": [
+        4,
+        17,
+        53,
+        101
+      ],
+      "publisher_manifest_assembly": "passed for default/W4 and optional W8; voices and Python config preserved",
+      "reference_voice_preparation": "prepared voice synthesized successfully",
+      "all_w4_voices": "115/115 produced finite nonzero audio on the Linux GPU",
+      "cpu_regression": "6/6 WAV files byte-identical to base bfab0cbd31a5697e5cba4779f7eed78368eeede0, default/W4, seeds 1/42/1234",
+      "audio_review": "Representative generated clips checked with speech recognition; no human listening assessment"
+    },
+    "observations": [
+      "Portable scalar CPU LM exceeded the legacy reference RMSE threshold (0.15858495 vs 0.15); the documented native AVX2 build passed (0.07333/0.07642). No CPU kernel changes relative to the base branch.",
+      "Published CPU W4 matches Python TorchScript exactly but differs from the current eager decoder (max error 0.22980946 at 7 tokens). A fresh CPU W4 export passed all three eager/native cases exactly.",
+      "The static LibreSSL CLI test build required SSL_CERT_FILE; the documented source build with system OpenSSL passed without it.",
+      "Windows Python 3.12 wheel on L4/WDDM: first CUDA synthesis took about 71 seconds for W4 and 109 seconds for default; reusing the W4 model produced a longer second clip in about 3 seconds. The docs recommend keeping the model open. These are startup observations, not cross-platform performance guarantees.",
+      "This pass executed CUDA hardware tests on RTX 3090 and L4 only; other GPU architectures, ARM64 and macOS were not retested."
+    ]
   }
 }

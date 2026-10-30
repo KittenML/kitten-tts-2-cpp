@@ -29,14 +29,14 @@ int main(int argc,char ** argv) try {
     std::setlocale(LC_ALL,"C.UTF-8");
     try { std::locale::global(std::locale("C.UTF-8")); } catch (const std::runtime_error &) {}
     std::map<std::string,std::string> args;
-    const std::vector<std::string> flags={"--download-only","--offline","--no-normalize","--no-reference","--no-repack","--greedy","--tokens-only","--frontend","--help"};
+    const std::vector<std::string> flags={"--download-only","--offline","--no-normalize","--no-reference","--no-repack","--greedy","--tokens-only","--frontend","--allow-hybrid","--timings","--help"};
     for(int i=1;i<argc;++i) {
         std::string key=argv[i];
         if(std::find(flags.begin(),flags.end(),key)!=flags.end()) args[key]="1";
         else {if(key.rfind("--",0)!=0 || i+1>=argc) throw std::runtime_error("expected --option value");args[key]=argv[++i];}
     }
     if(args.count("--help") || argc==1) {
-        std::cout<<"KittenTTS2 CPU inference\n"
+        std::cout<<"KittenTTS2 inference (speech LM on CPU by default; CUDA builds can offload it with --gpu-layers)\n"
           "  kitten-tts --text TEXT [--voice Bruno] [--output output.wav]\n"
           "  --repo ID --revision REV --decoder default|student_w4|student_w8\n"
           "  --cache-dir DIR --offline --download-only\n"
@@ -44,7 +44,13 @@ int main(int argc,char ** argv) try {
           "  --model FILE   override the GGUF with a local file\n"
           "  --data DIR      prepared kitten-text-processing grammar directory\n"
           "  --threads N --decoder-threads N --seed N --preset stable|expressive\n"
-          "  --no-repack    disable CPU weight repacking to reduce runtime memory\n"
+          "  --decoder-device cpu|cuda (cuda downloads the decoder's CUDA export; needs a CUDA LibTorch)\n"
+          "  --no-repack    disable CPU (AMX) weight repacking to reduce runtime memory; the GPU TQ2_1 to Q2_0 repack still runs\n"
+          "  --gpu-layers N|all  LM layers to offload to the GPU (default 0 = CPU; 29, 99 or all = whole LM)\n"
+          "  --main-gpu N   GPU index for the LM (single-GPU mode, default 0)\n"
+          "  --flash-attn auto|on|off (default auto)\n"
+          "  --allow-hybrid accept TQ2_1 weights left on the CPU when --gpu-layers > 0\n"
+          "  --timings      print per-stage times, RTF and peak GPU memory; add them to the report\n"
           "  --max-tokens N --temperature F --top-k N --top-p F --min-p F\n"
           "  --repetition-penalty F --repetition-window N --run-penalty F --run-grace N\n"
           "  --chunk-chars N --chunk-min-chars N --chunk-gap F\n"
@@ -55,7 +61,7 @@ int main(int argc,char ** argv) try {
         return 0;
     }
     auto get=[&](const std::string & key,const std::string & fallback){auto it=args.find(key);return it==args.end()?fallback:it->second;};
-    const std::vector<std::string> known={"--repo","--revision","--decoder","--cache-dir","--assets","--model","--text","--voice","--output","--data","--threads","--decoder-threads","--seed","--preset","--max-tokens","--temperature","--top-k","--top-p","--min-p","--repetition-penalty","--repetition-window","--run-penalty","--run-grace","--chunk-chars","--chunk-min-chars","--chunk-gap","--report","--logits","--force-tokens","--decode-tokens","--repeat"};
+    const std::vector<std::string> known={"--repo","--revision","--decoder","--cache-dir","--assets","--model","--text","--voice","--output","--data","--threads","--decoder-threads","--seed","--preset","--max-tokens","--temperature","--top-k","--top-p","--min-p","--repetition-penalty","--repetition-window","--run-penalty","--run-grace","--chunk-chars","--chunk-min-chars","--chunk-gap","--report","--logits","--force-tokens","--decode-tokens","--repeat","--gpu-layers","--main-gpu","--flash-attn","--decoder-device"};
     for(auto & a:args) if(std::find(flags.begin(),flags.end(),a.first)==flags.end() && std::find(known.begin(),known.end(),a.first)==known.end()) throw std::runtime_error("unknown option "+a.first);
     if(args.count("--frontend")) {
         kitten_text_processing::Normalizer normalizer(get("--data",KITTEN_DEFAULT_DATA));
