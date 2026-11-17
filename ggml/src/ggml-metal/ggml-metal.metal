@@ -5858,11 +5858,14 @@ kernel void kernel_pad_impl(
     const int32_t k0 = tgpig.x/args.ne1;
     const int32_t i1 = tgpig.x - k0*args.ne1;
 
-    const int32_t i03 = i3;
-    const int32_t i02 = i2;
-    const int32_t i01 = i1;
+    // source indices: left padding (lp*) shifts the source, everything outside it is zero
+    const int32_t i03 = i3 - args.lp3;
+    const int32_t i02 = i2 - args.lp2;
+    const int32_t i01 = i1 - args.lp1;
 
-    device const T * src0_ptr = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+    const bool row_in = i01 >= 0 && i01 < args.ne01 && i02 >= 0 && i02 < args.ne02 && i03 >= 0 && i03 < args.ne03;
+
+    device const T * src0_ptr = (device const T *) (src0 + (row_in ? i03*args.nb03 + i02*args.nb02 + i01*args.nb01 : 0));
     device       T * dst_ptr  = (device       T *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
 
     for (int32_t l0 = 0; l0 < 1024; l0 += ntg.x) {
@@ -5871,8 +5874,9 @@ kernel void kernel_pad_impl(
             break;
         }
 
-        if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-            dst_ptr[i0] = src0_ptr[i0];
+        const int32_t i00 = i0 - args.lp0;
+        if (row_in && i00 >= 0 && i00 < args.ne00) {
+            dst_ptr[i0] = *((device const T *) ((device const char *) src0_ptr + i00*args.nb00));
         } else {
             dst_ptr[i0] = 0.0f;
         }
@@ -10163,25 +10167,27 @@ kernel void kernel_mul_mm(
     cT.store(tD.slice(ra, rb));
 }
 
-#else
+#endif // GGML_METAL_HAS_TENSOR
 
+// simdgroup-matrix product, shared by kernel_mul_mm (without the tensor API) and kernel_mul_mm_f32_f32_strict.
+// threadgroup memory: A tile 64 x 32 of S0, then B tile 32 x 32 of S1 (4096 + 2048 bytes for half, 8192 + 4096 for float)
 template<
     typename S0, typename S0_4x4, typename S0_8x8,
     typename S1, typename S1_2x4, typename S1_8x8,
     typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
     typename T0, typename T0_4x4, typename T1, typename T1_2x4>
-kernel void kernel_mul_mm(
+inline void kernel_mul_mm_simdgroup_impl(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
         device const char * src1,
         device       char * dst,
-        threadgroup  char * shmem [[threadgroup(0)]],
-        uint3  tgpig[[threadgroup_position_in_grid]],
-        ushort tiitg[[thread_index_in_threadgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+        threadgroup  char * shmem,
+        uint3  tgpig,
+        ushort tiitg,
+        ushort sgitg) {
 
     threadgroup S0 * sa = (threadgroup S0 *)(shmem);
-    threadgroup S1 * sb = (threadgroup S1 *)(shmem + 4096);
+    threadgroup S1 * sb = (threadgroup S1 *)(shmem + 64*32*sizeof(S0));
 
     constexpr int NR0 = 64;
     constexpr int NR1 = 32;
@@ -10380,7 +10386,39 @@ kernel void kernel_mul_mm(
     }
 }
 
+#ifndef GGML_METAL_HAS_TENSOR
+template<
+    typename S0, typename S0_4x4, typename S0_8x8,
+    typename S1, typename S1_2x4, typename S1_8x8,
+    typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
+    typename T0, typename T0_4x4, typename T1, typename T1_2x4>
+kernel void kernel_mul_mm(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mm_simdgroup_impl<S0, S0_4x4, S0_8x8, S1, S1_2x4, S1_8x8, block_q, nl, dequantize_func, T0, T0_4x4, T1, T1_2x4>(
+        args, src0, src1, dst, shmem, tgpig, tiitg, sgitg);
+}
 #endif // GGML_METAL_HAS_TENSOR
+
+// f32 x f32 with f32 multiplies (GGML_PREC_F32_STRICT): both tiles stay float in threadgroup memory
+kernel void kernel_mul_mm_f32_f32_strict(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mm_simdgroup_impl<float, float4x4, simdgroup_float8x8, float, float2x4, simdgroup_float8x8, float4x4, 1, dequantize_f32, float, float4x4, float, float2x4>(
+        args, src0, src1, dst, shmem, tgpig, tiitg, sgitg);
+}
 
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(

@@ -104,6 +104,32 @@ struct ggml_metal_library {
     NSLock * lock;
 };
 
+// The default Metal Shading Language version of a run-time compile follows the SDK that the *process* was linked
+// against, not this library's. A host program built with an old SDK (python.org's Python 3.10 to 3.12 for macOS use the
+// macOS 12.1 SDK) would compile ggml's shaders as MSL 2.4, which fails ("no matching constructor for initialization of
+// 'threadgroup metal::half4x4[512]'"). Ask for the newest version this OS supports, as a process linked with a current
+// SDK gets by default.
+static void ggml_metal_set_language_version(MTLCompileOptions * options) {
+#if TARGET_OS_OSX && defined(__MAC_OS_X_VERSION_MAX_ALLOWED)
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+    if (@available(macOS 27.0, *)) { options.languageVersion = MTLLanguageVersion4_1; return; }
+#endif
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
+    if (@available(macOS 26.0, *)) { options.languageVersion = MTLLanguageVersion4_0; return; }
+#endif
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+    if (@available(macOS 15.0, *)) { options.languageVersion = MTLLanguageVersion3_2; return; }
+#endif
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000
+    if (@available(macOS 14.0, *)) { options.languageVersion = MTLLanguageVersion3_1; return; }
+#endif
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000
+    if (@available(macOS 13.0, *)) { options.languageVersion = MTLLanguageVersion3_0; return; }
+#endif
+#endif
+    (void) options;
+}
+
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLLibrary> library = nil;
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
@@ -228,6 +254,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
+                ggml_metal_set_language_version(options);
 
                 //[options setFastMathEnabled:false];
 
@@ -285,6 +312,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
 
         MTLCompileOptions * options = [MTLCompileOptions new];
         options.preprocessorMacros = prep;
+        ggml_metal_set_language_version(options);
 
         library = [device newLibraryWithSource:src options:options error:&error];
         if (error) {
@@ -1258,8 +1286,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 return false;
             }
 
-            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
-                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
+            // left and right zero padding in every dimension (kernel_pad_impl)
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_TIMESTEP_EMBEDDING:
             return op->src[0]->type == GGML_TYPE_F32;
@@ -1386,7 +1414,13 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            if (op->op == GGML_OP_MUL_MAT && op->op_params[0] == GGML_PREC_F32_STRICT && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1]->type != GGML_TYPE_F32) {
+                return false; // strict f32 asks for f32 multiplies: f32 x f32 has its own kernel (kernel_mul_mm_f32_f32_strict)
+            }
+            // TQ2_1 (this fork's ternary type) has no Metal kernels: reporting it unsupported lets llama's loader repack such
+            // weights to Q2_0 for Metal buffers, as for other GPU backends, instead of aborting in the kernel lookup
+            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4 && op->src[0]->type != GGML_TYPE_TQ2_1;
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
@@ -1448,7 +1482,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->src[0]->type != GGML_TYPE_NVFP4;
+            return op->src[0]->type != GGML_TYPE_NVFP4 && op->src[0]->type != GGML_TYPE_TQ2_1;
         case GGML_OP_SET_ROWS:
             {
                 if (op->src[0]->type == GGML_TYPE_F16) {

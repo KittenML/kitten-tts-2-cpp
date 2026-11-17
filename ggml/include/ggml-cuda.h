@@ -30,6 +30,10 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int de
 // conduct allreduce operation between devices
 GGML_BACKEND_API bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends);
 
+// Application kernels as graph nodes: handler for GGML_OP_CUSTOM nodes created with a NULL function (opt-in, see
+// ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_set_custom_handler")). stream is a cudaStream_t.
+typedef void (*ggml_backend_cuda_custom_t)(struct ggml_tensor * dst, void * stream, void * userdata);
+
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type(void);
 

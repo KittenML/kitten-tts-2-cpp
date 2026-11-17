@@ -75,6 +75,32 @@ with tempfile.TemporaryDirectory() as directory:
         print(f'GPU checks skipped (no CUDA device); --gpu-layers 99 gives: {expected}')
 print('Installed wheel: import, ABI, grammar, TorchScript decoding, NumPy output and option checks passed')
 
+# Kitten TTS 2 mini / nano / pico: the tiny library loads and exports its C API. x86-64 wheels also carry the
+# x86-64-v3 (AVX2) build, which serves the CPU on machines that have AVX2.
+import ctypes
+import platform
+from kitten_tts_cpp import tiny
+tiny_libs = sorted(p for p in package.iterdir() if 'kitten_tts_tiny' in p.name and p.suffix in ('.so', '.dll', '.dylib'))
+assert any('x86_64_v3' not in p.name for p in tiny_libs), tiny_libs
+x86 = platform.machine().lower() in ('x86_64', 'amd64')
+assert any('x86_64_v3' in p.name for p in tiny_libs) == x86, tiny_libs
+for p in tiny_libs:
+    if 'x86_64_v3' in p.name and not tiny._x86_64_v3():
+        continue  # this CPU cannot run that build
+    lib = ctypes.CDLL(str(p))
+    for symbol in ('kt_tiny_load', 'kt_tiny_synthesize', 'kt_tiny_generate_chunk', 'kt_tiny_last_error'):
+        assert hasattr(lib, symbol), (p.name, symbol)
+cpu_lib = Path(tiny._library('cpu')[1]).name
+assert ('x86_64_v3' in cpu_lib) == (x86 and tiny._x86_64_v3()), cpu_lib
+if cuda_wheel and gpu_present:
+    assert 'x86_64_v3' not in Path(tiny._library('cuda')[1]).name
+print(f'Kitten TTS 2 tiny libraries load: {[p.name for p in tiny_libs]}; device="cpu" uses {cpu_lib}')
+# spaCy's small English model ships in the wheel: the English front end loads it from there, with no download.
+english = package / 'tiny_frontend' / 'en_core_web_sm'
+assert json.loads((english / 'meta.json').read_text(encoding='utf-8'))['version'] == '3.8.0', english
+assert all((english / part).is_file() for part in ('config.cfg', 'tokenizer', 'tok2vec/model', 'tagger/model',
+                                                   'vocab/strings.json', 'LICENSE')), english
+
 if os.environ.get('KITTEN_WHEEL_NETWORK_TEST') == '1':
     with tempfile.TemporaryDirectory() as cache:
         try:
@@ -113,3 +139,13 @@ if os.environ.get('KITTEN_WHEEL_MODEL_TEST') == '1':
                     assert audio.size > 0 and np.isfinite(audio).all() and np.max(np.abs(audio)) > 1e-4
                     assert model.last_report['lm']['placement'] == 'gpu', model.last_report['lm']
                 print(f'Published {decoder} CUDA decoder synthesis passed (offline={offline})')
+    # Kitten TTS 2 pico: one German sentence (espeak-ng front end, every Python version), on the CPU and on the GPU
+    devices = ['cpu'] + (['cuda'] if gpu_present else [])
+    with tempfile.TemporaryDirectory() as cache:
+        for device in devices:
+            model = kitten_tts_cpp.KittenTTS2Tiny('KittenML/kitten-tts-2-pico', cache_dir=os.environ.get('KITTEN_WHEEL_MODEL_CACHE', cache),
+                                                  device=device)
+            audio = model.generate('Guten Morgen.', language='de')
+            assert audio.dtype == np.float32 and audio.size > 0.3 * model.sample_rate and np.isfinite(audio).all()
+            assert np.max(np.abs(audio)) > 1e-3
+            print(f'Kitten TTS 2 pico synthesis on {device} passed ({audio.size / model.sample_rate:.2f} s)')

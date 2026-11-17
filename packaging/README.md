@@ -84,7 +84,7 @@ python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl
 python -m pip install /path/to/kitten_tts_cpp-<version>-<python>-<abi>-<platform>.whl
 ```
 
-For the GPU package, install the CUDA build of PyTorch instead, then the GPU wheel. Use a virtual environment: `python3 -m venv .venv` and `. .venv/bin/activate` on Linux (recent distributions such as Ubuntu 24.04 do not let pip install into the system Python), or `py -m venv .venv` and `.venv\Scripts\activate` on Windows. On Linux:
+For the GPU package, install the CUDA build of PyTorch instead, then the GPU wheel. Use a virtual environment: `python3 -m venv .venv` and `. .venv/bin/activate` on Linux and macOS (recent distributions such as Ubuntu 24.04 do not let pip install into the system Python), or `py -m venv .venv` and `.venv\Scripts\activate` on Windows. On Linux:
 
 ```sh
 python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
@@ -102,7 +102,7 @@ Install only one of the packages in an environment; all of them provide `kitten_
 
 No compiler, CMake, or exporter is needed to install the wheel. Model assets are still downloaded from the model repository on first use. The wheel includes the normalizer data and statically linked LibreSSL. It uses the separately installed PyTorch libraries rather than bundling another copy. Repair tools handle other native dependencies. HTTPS uses the certifi CA bundle by default; `SSL_CERT_FILE` or the constructor's `ca_file` parameter can select a custom trust bundle. This is why the wheel requires the exact PyTorch release it was compiled against and checks it before loading the native extension.
 
-Portable builds disable host-specific instruction flags, including AVX/AVX2/AVX-512 and AMX on x86, and use baseline GGML kernels. They prioritize compatibility and may be slower than local CPU-optimized builds. LibTorch retains its own CPU optimizations. Rebuild from source without `KITTEN_PORTABLE=1` for native CPU optimizations; quantized arithmetic can differ between kernel paths.
+Portable builds disable host-specific instruction flags, including AVX/AVX2/AVX-512 and AMX on x86, and use baseline GGML kernels. They prioritize compatibility and may be slower than local CPU-optimized builds. LibTorch retains its own CPU optimizations. Rebuild from source without `KITTEN_PORTABLE=1` for native CPU optimizations; quantized arithmetic can differ between kernel paths. On Apple silicon the native build was slower (Kitten TTS 2 nano 1.9 times on an Apple M4), so keep `KITTEN_PORTABLE=1` there. The macOS arm64 wheel builds the Kitten TTS 2 mini / nano / pico library a second time with ggml's Metal backend (shaders embedded, compiled at run time) and ships that one; the Kitten TTS 2 extension stays CPU-only.
 
 ## Using the GPU
 
@@ -117,6 +117,15 @@ with KittenTTS("KittenML/kitten-tts-2", decoder="student_w4", gpu_layers=99) as 
 ```
 
 The first CUDA call on Windows can take over a minute; keep the model open for faster repeated requests.
+
+Kitten TTS 2 mini, nano and pico (`KittenTTS2Tiny`) use the GPU of the GPU package by default (`device="auto"`; `device="cpu"` keeps them on the CPU):
+
+```python
+from kitten_tts_cpp import KittenTTS2Tiny
+
+with KittenTTS2Tiny("KittenML/kitten-tts-2-nano") as model:
+    audio = model.generate("Hello from the GPU.", voice="Eleanor")
+```
 
 The options match the command-line runner's flags, and invalid values give the same errors:
 

@@ -1623,7 +1623,8 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     } else if (compute_type == GGML_TYPE_F16 && !fast_fp16_hardware_available(ggml_cuda_info().devices[ctx.device].cc)) {
         compute_type = GGML_TYPE_F32;
     }
-    if (dst->op_params[0] == GGML_PREC_F32) {
+    const bool strict_f32 = dst->op_params[0] == GGML_PREC_F32_STRICT;
+    if (dst->op_params[0] == GGML_PREC_F32 || strict_f32) {
         compute_type = GGML_TYPE_F32;
     }
 
@@ -1646,7 +1647,16 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
 
     switch (compute_type) {
         case GGML_TYPE_F32:
-            ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
+            if (strict_f32) {
+                // the shared handle allows TF32 tensor cores for f32 GEMMs; this product asked for full f32 multiplies
+                cublasMath_t prev_math;
+                CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(), &prev_math));
+                CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), CUBLAS_DEFAULT_MATH));
+                ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
+                CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), prev_math));
+            } else {
+                ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
+            }
             break;
         case GGML_TYPE_BF16:
             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_BF16>(ctx, src0, src1, dst);
@@ -1850,7 +1860,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
         return;
     }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+    // the f32 MMA kernels multiply in TF32: not for products that asked for strict f32
+    const bool strict_f32 = src0->type == GGML_TYPE_F32 && dst->op_params[0] == GGML_PREC_F32_STRICT;
+    if (!strict_f32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
@@ -2020,6 +2032,15 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         ne0, ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted,
         ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
         nb1, nb2, nb3, stream);
+}
+
+// process-wide, set by the application (atomic: backends on other threads read it while it is set)
+static std::atomic<ggml_backend_cuda_custom_t> g_cuda_custom_handler{nullptr};
+
+static bool ggml_cuda_custom_is_hooked(const ggml_tensor * op) {
+    ggml_custom_op_params p;
+    memcpy(&p, op->op_params, sizeof(p));
+    return p.fun == nullptr && g_cuda_custom_handler.load(std::memory_order_acquire) != nullptr;
 }
 
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
@@ -2360,6 +2381,16 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
+            break;
+        case GGML_OP_CUSTOM:
+            {
+                if (!ggml_cuda_custom_is_hooked(dst)) {
+                    return false;
+                }
+                ggml_custom_op_params p;
+                memcpy(&p, dst->op_params, sizeof(p));
+                g_cuda_custom_handler.load(std::memory_order_acquire)(dst, ctx.stream(), p.userdata);
+            }
             break;
         case GGML_OP_LIGHTNING_INDEXER:
             ggml_cuda_lightning_indexer(ctx, dst);
@@ -4794,6 +4825,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (a->nb[0] != ggml_element_size(a) || b->nb[0] != ggml_element_size(b)) {
                     return false; // TODO this could in principle be implemented though currently there is no use case.
                 }
+                if (b->ne[1] > 1 && b->nb[1] < b->ne[0]*b->nb[0]) {
+                    // src1 rows overlap (a convolution's sliding window) or all alias one row (nb[1] == 0): cuBLAS needs
+                    // ldb >= k, so both run on another backend
+                    return false;
+                }
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16) {
                     return false;
                 }
@@ -5166,6 +5202,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:
             return true;
+        case GGML_OP_CUSTOM:
+            return ggml_cuda_custom_is_hooked(op);
         case GGML_OP_LIGHTNING_INDEXER:
             return ggml_cuda_lightning_indexer_supported(dev_ctx->device, op);
 
@@ -5328,8 +5366,18 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+// Opt-in hook for application kernels: a GGML_OP_CUSTOM node whose function pointer is NULL runs the handler on the
+// backend's stream (no host synchronisation, captured by CUDA graphs). Without a handler such nodes stay unsupported.
+// One handler per process; passing NULL removes it. The handler is called on the thread that computes the graph.
+static void ggml_backend_cuda_set_custom_handler(ggml_backend_cuda_custom_t fn) {
+    g_cuda_custom_handler.store(fn, std::memory_order_release);
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_cuda_set_custom_handler") == 0) {
+        return (void *)ggml_backend_cuda_set_custom_handler;
+    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }

@@ -1,0 +1,2 @@
+# spaCy's small English model, vendored unchanged from its official wheel: data, shown as binary in diffs.
+python/kitten_tts_cpp/tiny_frontend/en_core_web_sm/** -diff

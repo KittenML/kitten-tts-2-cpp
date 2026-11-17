@@ -760,16 +760,26 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
-    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
-             base, bc_inp, bc_out, ne12, ne13, r2, r3);
+    // GGML_PREC_F32_STRICT f32 x f32: the simdgroup kernel with float tiles (f32 multiplies), with or without the tensor API
+    const bool strict = op->op == GGML_OP_MUL_MAT && op->op_params[0] == GGML_PREC_F32_STRICT &&
+                        tsrc0 == GGML_TYPE_F32 && tsrc1 == GGML_TYPE_F32;
+
+    if (strict) {
+        snprintf(base, 256, "kernel_mul_mm_f32_f32_strict");
+        snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
+                 base, bc_inp, op->ne[0] % 64 != 0 || op->ne[1] % 32 != 0, ne12, ne13, r2, r3);
+    } else {
+        snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+        snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
+                 base, bc_inp, bc_out, ne12, ne13, r2, r3);
+    }
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
         ggml_metal_cv_set_bool(cv, bc_inp, FC_MUL_MM + 0);
-        ggml_metal_cv_set_bool(cv, bc_out, FC_MUL_MM + 1);
+        ggml_metal_cv_set_bool(cv, strict ? (op->ne[0] % 64 != 0 || op->ne[1] % 32 != 0) : bc_out, FC_MUL_MM + 1);
         ggml_metal_cv_set_int16(cv, ne12,  FC_MUL_MM + 2);
         ggml_metal_cv_set_int16(cv, ne13,  FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
@@ -780,7 +790,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_free(cv);
     }
 
-    if (has_tensor) {
+    if (strict) {
+        res.nr0 = 64;
+        res.nr1 = 32;
+
+        res.smem = 64*32*sizeof(float) + 32*32*sizeof(float); // float A and B tiles (the output staging fits in them)
+    } else if (has_tensor) {
         res.nr0 = NRA;
         res.nr1 = NRB;
 

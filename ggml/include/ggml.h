@@ -438,6 +438,8 @@ extern "C" {
     enum ggml_prec {
         GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
         GGML_PREC_F32     = 10,
+        GGML_PREC_F32_STRICT = 11, // GGML_PREC_F32 and no reduced-precision multiplies (no TF32) for f32 inputs
+                                   // (honoured by CUDA, Metal and Vulkan; other backends treat it as GGML_PREC_F32)
     };
 
     // op hint

@@ -3816,7 +3816,9 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
     }
 
     nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-    nth = std::min(nth, args.ne00_t);
+    // more than one simdgroup: a whole number of simdgroups (the threads loop over the row). With a partial last simdgroup
+    // (e.g. 290 threads for rows of 1160 floats) the mean and variance came out wrong on an Apple M6.
+    nth = args.ne00_t >= 32 ? std::min(nth, args.ne00_t - args.ne00_t % 32) : std::min(nth, args.ne00_t);
 
     const size_t smem = pipeline.smem;
 
@@ -4574,7 +4576,11 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
         /*.nb0  =*/ nb0,
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
-        /*.nb3  =*/ nb3
+        /*.nb3  =*/ nb3,
+        /*.lp0  =*/ ggml_get_op_params_i32(op, 0),
+        /*.lp1  =*/ ggml_get_op_params_i32(op, 2),
+        /*.lp2  =*/ ggml_get_op_params_i32(op, 4),
+        /*.lp3  =*/ ggml_get_op_params_i32(op, 6),
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_pad(lib, op);
@@ -4582,6 +4588,7 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
     if (pipeline.c4) {
         args.ne00 = ne00/4;
         args.ne0  = ne0/4;
+        args.lp0  = args.lp0/4;
     }
 
     const int nth_max = MIN(64, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
