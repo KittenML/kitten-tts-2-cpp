@@ -3810,7 +3810,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
     assert(n >= 0);
     assert(k >= 0);
     assert(lda >= k);
-    assert(ldb >= k);
+    assert(ldb > 0); // ldb < k is allowed: B may have overlapping rows (a 1-D convolution's sliding window), it is only read
     assert(ldc >= m);
     assert(params->nth > 0);
     assert(params->ith < params->nth);

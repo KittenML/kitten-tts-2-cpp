@@ -9,6 +9,8 @@ recursive-include scripts *
 prune tools/ui/node_modules
 recursive-include vendor *
 recursive-include python *.py
+recursive-include python/kitten_tts_cpp/tiny_frontend *.json *.txt COPYING NOTICE LICENSE-kittenml
+graft python/kitten_tts_cpp/tiny_frontend/en_core_web_sm
 prune vendor/kitten-text-processing/.git
 prune vendor/kitten-text-processing/build
 prune vendor/kitten-text-processing/dist

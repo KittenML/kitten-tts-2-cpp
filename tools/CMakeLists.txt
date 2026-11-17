@@ -46,3 +46,8 @@ option(LLAMA_BUILD_KITTEN_TTS "Build KittenTTS2 CPU speech inference (requires L
 if(LLAMA_BUILD_KITTEN_TTS)
     add_subdirectory(kitten-tts)
 endif()
+
+option(LLAMA_BUILD_KITTEN_TTS_TINY "Build Kitten TTS 2 mini / nano / pico on ggml (no LibTorch)" OFF)
+if(LLAMA_BUILD_KITTEN_TTS_TINY)
+    add_subdirectory(kitten-tts-tiny)
+endif()

@@ -387,7 +387,7 @@ static std::string var_to_str(ggml_type type) {
 }
 
 static std::string var_to_str(ggml_prec prec) {
-    return prec == GGML_PREC_F32 ? "f32" : "def";
+    return prec == GGML_PREC_F32_STRICT ? "f32_strict" : prec == GGML_PREC_F32 ? "f32" : "def";
 }
 
 static std::string var_to_str(ggml_op_pool pool) {
@@ -4426,6 +4426,60 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
 }
 
 // GGML_OP_MUL_MAT_ID
+// GGML_OP_MUL_MAT with an f32 src1 whose rows overlap in memory (row stride step < k elements): the sliding window of
+// a 1-D convolution read in place. step == k is an ordinary contiguous src1. prec GGML_PREC_F32_STRICT asks for full
+// f32 multiplies (no TF32), so the result must match the CPU to f32 rounding.
+struct test_mul_mat_window : public test_case {
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int64_t step;
+    const ggml_prec prec;
+
+    std::string vars() override {
+        return VARS_TO_STR5(m, n, k, step, prec);
+    }
+
+    double max_nmse_err() override {
+        return prec == GGML_PREC_F32_STRICT ? 1e-10 : 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * m * n * k;
+    }
+
+    test_mul_mat_window(int64_t m = 64, int64_t n = 50, int64_t k = 96, int64_t step = 32, ggml_prec prec = GGML_PREC_DEFAULT)
+        : m(m), n(n), k(k), step(step), prec(prec) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->view_src == nullptr) {   // the window view's elements overlap: fill its buffer once
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, m);
+        ggml_set_name(a, "a");
+        ggml_tensor * buf = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k + (n - 1) * step);
+        ggml_set_name(buf, "buf");
+        // ggml_view_2d checks the size as if the view were contiguous: make a small view and widen it
+        ggml_tensor * b = ggml_view_1d(ctx, buf, 1, 0);
+        b->ne[0] = k; b->ne[1] = n;
+        b->nb[1] = step * ggml_element_size(buf); b->nb[2] = b->nb[3] = b->nb[1] * n;
+        GGML_ASSERT(ggml_nbytes(b) <= ggml_nbytes(buf));
+        ggml_set_name(b, "b_window");
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        if (prec != GGML_PREC_DEFAULT) {
+            ggml_mul_mat_set_prec(out, prec);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
     const ggml_type type_b;
@@ -8712,6 +8766,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
+    // long rows (instance norm over time in Kitten TTS 2's decoder): row length / 4 between the SIMD width and the
+    // threadgroup limit and not a multiple of 32 (1160 / 4 = 290), and longer than the threadgroup limit
+    for (uint32_t n : { 1160, 1164, 4640, 20000 }) {
+        test_cases.emplace_back(new test_norm(GGML_TYPE_F32, { n, 96, 1, 1 }, false, 1e-5f));
+    }
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 10.f }) {
         for (uint32_t n : { 64, 1025 }) {
             for (bool v : { false, true }) {
@@ -8971,6 +9030,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 67,  {1,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 16, 32, 32, { 1,  1}, {1, 1}, {0, 1, 2, 3}, 64, 3));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 77, 77, {12,1}, {1,1}));
+    for (int64_t step : {1, 7, 32, 96}) {   // overlapping src1 rows (step < k) and contiguous rows (step == k)
+        test_cases.emplace_back(new test_mul_mat_window(64, 50, 96, step));
+        test_cases.emplace_back(new test_mul_mat_window(17, 300, 3*128, step));
+    }
+    for (int64_t k : {64, 576, 4096}) {   // strict f32 products (no TF32)
+        test_cases.emplace_back(new test_mul_mat_window(128, 200, k, k, GGML_PREC_F32_STRICT));
+        test_cases.emplace_back(new test_mul_mat_window(128, 200, k, 8, GGML_PREC_F32_STRICT));
+    }
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));

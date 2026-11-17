@@ -1,0 +1,38 @@
+Vendored in this folder besides kittenml's own front end (LICENSE-kittenml):
+
+misaki/: en.py, ja.py, cutlet.py, num2kana.py, token.py and the American English and Japanese data files of misaki 0.9.4
+(https://github.com/hexgrad/misaki), licensed under the Apache License, Version 2.0. Changed: en.py imports num2words
+from ../num2words; ja.py imports pyopenjtalk only on its pyopenjtalk path, which is not used; cutlet.py uses
+../mojimoji.py and the unidic-lite dictionary from ../unidic.py; en.py loads spaCy's English model from
+../en_core_web_sm instead of downloading it. Two of these files are themselves adapted by misaki:
+  - cutlet.py from cutlet (https://github.com/polm/cutlet), MIT License, Copyright (c) 2020 Paul O'Leary McCann;
+  - num2kana.py from Convert-Numbers-to-Japanese (https://github.com/Greatdane/Convert-Numbers-to-Japanese), MIT
+    License, Copyright (c) 2018 David Wilson.
+  MIT License: Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction, including without
+  limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+  Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+  The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+  the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+  LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+  SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+  IN THE SOFTWARE.
+
+en_core_web_sm/: spaCy's small English model en_core_web_sm 3.8.0 (https://github.com/explosion/spacy-models),
+Copyright 2021 ExplosionAI GmbH, licensed under the MIT License (en_core_web_sm/LICENSE; the MIT terms are also
+quoted above). The files are the model folder of the official en_core_web_sm-3.8.0 wheel, unchanged.
+en_core_web_sm/LICENSES_SOURCES names the data it was trained on and their licences (OntoNotes 5, licensed
+to ExplosionAI; ClearNLP; WordNet 3.0, whose licence text is included there).
+
+mojimoji.py: a pure-Python port of mojimoji 0.0.13 (https://github.com/studio-ousia/mojimoji), Copyright 2013 Studio
+Ousia, licensed under the Apache License, Version 2.0: the same conversion tables and rules.
+
+num2words/: the English converter of num2words 0.5.14 (https://github.com/savoirfairelinux/num2words), Copyright (c)
+2003 Taro Ogawa and (c) 2013 Savoir-faire Linux inc., licensed under the GNU Lesser General Public License, version
+2.1 or later (num2words/COPYING). Changed: __init__.py offers English only. These are ordinary Python source files:
+you may change or replace them under the terms of that licence.
+
+Not included: espeak-ng (GPL-3.0), used through the separate espeakng_loader and phonemizer packages, and the UniDic
+dictionary (unidic-lite 1.0.8, BSD-3-Clause, LGPL-2.1 or GPL-2.0), which unidic.py downloads from PyPI on the first
+Japanese use unless the unidic-lite package is installed.

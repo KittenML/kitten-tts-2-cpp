@@ -1303,9 +1303,13 @@ void ggml_compute_forward_mul_mat(
     const int64_t r2 = ne12 / ne02;
     const int64_t r3 = ne13 / ne03;
 
+    // sgemm also takes a src1 whose rows overlap (row stride smaller than a row, but not zero: the sliding window of a
+    // 1-D convolution, read in place). Any other non-contiguous src1, including rows that all alias one row (nb11 == 0),
+    // keeps the vec_dot path below, as before.
     const bool src1_cont = ggml_is_contiguous(src1);
+    const bool src1_rows_overlap = nb10 == ggml_type_size(src1->type) && nb11 > 0 && nb11 < ne10*nb10;
 
-    if (src1_cont) {
+    if (src1_cont || src1_rows_overlap) {
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
                 if (!llamafile_sgemm(params,

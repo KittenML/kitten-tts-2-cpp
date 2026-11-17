@@ -2,7 +2,9 @@
 
 C++ inference for KittenTTS2 on the CPU, with an optional NVIDIA GPU (CUDA) path, built-in voices, expression controls, and prepared reference voices. The runtime downloads prepared model assets and runs synthesis natively in C++. Users do not need to run the Python exporter.
 
-The speech language model runs through llama.cpp/GGML, text normalization uses the [kitten-text-processing](https://github.com/KittenML/kitten-text-processing) submodule, and the S3 waveform decoder uses LibTorch on the CPU or on the GPU. Only KittenTTS2 checkpoints are supported.
+The speech language model runs through llama.cpp/GGML, text normalization uses the [kitten-text-processing](https://github.com/KittenML/kitten-text-processing) submodule, and the S3 waveform decoder uses LibTorch on the CPU or on the GPU.
+
+The same package also runs the small multilingual models Kitten TTS 2 mini, nano and pico (`KittenTTS2Tiny`, all in ggml, no LibTorch for synthesis); see [Kitten TTS 2 mini, nano and pico](#kitten-tts-2-mini-nano-and-pico) below.
 
 ## Features
 
@@ -15,9 +17,9 @@ The speech language model runs through llama.cpp/GGML, text normalization uses t
 
 ## Python interface
 
-Precompiled wheel builds are configured for Linux x86-64/ARM64, Apple Silicon macOS, Windows x86-64, and experimental Windows ARM64. See the [wheel matrix and installation guide](packaging/README.md).
+Precompiled wheel builds are configured for Linux x86-64/ARM64, Apple Silicon macOS 14 or newer (not Intel Macs), Windows x86-64, and experimental Windows ARM64. See the [wheel matrix and installation guide](packaging/README.md).
 
-The `py-interface` branch includes a native Python package with a KittenTTS-style API. `setup.py` invokes CMake during installation and bundles the normalizer grammar data. Install a CPU PyTorch build first, then build against that same installation:
+From PyPI, the install block in [Kitten TTS 2 mini, nano and pico](#kitten-tts-2-mini-nano-and-pico) also runs the `KittenTTS` example below on the CPU (its first call downloads about 1 GB and prints llama.cpp's loading log). To build from source instead: the `py-interface` branch includes a native Python package with a KittenTTS-style API. `setup.py` invokes CMake during installation and bundles the normalizer grammar data. Install a CPU PyTorch build first, then build against that same installation:
 
 ```sh
 git submodule update --init vendor/kitten-text-processing
@@ -28,7 +30,7 @@ python -m pip install setuptools wheel cmake numpy soundfile
 python -m pip install . --no-build-isolation
 ```
 
-A C++20 compiler and OpenSSL development headers are required for HTTPS downloads (`libssl-dev` on Debian/Ubuntu). Set `CMAKE_BUILD_PARALLEL_LEVEL=8` to control build parallelism. `CMAKE_ARGS` accepts extra CMake flags, such as `-DOPENSSL_ROOT_DIR=/path/to/openssl`. Builds optimize for the local CPU; use `CMAKE_ARGS="-DGGML_NATIVE=OFF"` when building a wheel for other machines. Source-built wheels require the exact PyTorch release used at build time and the linked system OpenSSL libraries. The portable CI wheels instead link LibreSSL statically.
+A C++20 compiler and OpenSSL development headers are required for HTTPS downloads (`libssl-dev` on Debian/Ubuntu). Set `CMAKE_BUILD_PARALLEL_LEVEL=8` to control build parallelism. `CMAKE_ARGS` accepts extra CMake flags, such as `-DOPENSSL_ROOT_DIR=/path/to/openssl`. Builds optimize for the local CPU; use `CMAKE_ARGS="-DGGML_NATIVE=OFF"` when building a wheel for other machines. On macOS, run `xcode-select --install` first (compiler and git); macOS has no OpenSSL headers, and on Apple silicon the native build is slower, so run the last line as `CMAKE_ARGS="-DLLAMA_BUILD_LIBRESSL=ON -DGGML_NATIVE=OFF" python -m pip install . --no-build-isolation`. Source-built wheels require the exact PyTorch release used at build time and the linked system OpenSSL libraries. The portable CI wheels instead link LibreSSL statically.
 
 ```python
 from kitten_tts_cpp import KittenTTS  # KittenTTS2 and get_model are also available
@@ -47,7 +49,40 @@ Weights and the decoder stay loaded between calls. The GIL is released during na
 
 The constructor also accepts `cache_dir`, `hf_token`, `revision`, `offline`, `decoder_threads`, `repack`, `model_path` (a local GGUF override), `data_dir`, and `ca_file` (a custom HTTPS trust bundle). A local prepared asset directory can replace the repository ID. Generation supports the Python KittenTTS2 preset, sampling, normalization, reference-prompt, and `advanced` options, including `use_emotion`.
 
-Only KittenTTS2 and `weights="packed"` are supported; `device=` accepts only `"cpu"` (use `gpu_layers` and `decoder_device` for the GPU). This package uses the separate `kitten_tts_cpp` import name so it can coexist with `kittenml`. Raw-audio `reference=` cloning is not implemented; prepare a reference with `prepare_reference.py` and select its voice name. It does not provide the older ONNX models or guarantee identical sampled output to Python's original PyTorch backend.
+For `KittenTTS`, only KittenTTS2 and `weights="packed"` are supported; `device=` accepts only `"cpu"` (use `gpu_layers` and `decoder_device` for the GPU). This package uses the separate `kitten_tts_cpp` import name so it can coexist with `kittenml`. Raw-audio `reference=` cloning is not implemented; prepare a reference with `prepare_reference.py` and select its voice name. It does not provide the older ONNX models or guarantee identical sampled output to Python's original PyTorch backend.
+
+### Kitten TTS 2 mini, nano and pico
+
+The package needs **Python 3.10 to 3.14** (check with `python3 --version`, or `py --version` on Windows). If your
+`python3` is older, use a newer Python in the first line, for example `python3.12 -m venv .venv`. On macOS (Apple
+silicon, macOS 14 or newer), a new Mac has no Python 3: `python3` only opens a dialog that offers the developer tools
+(you can cancel it). Install Python 3.14 with the "macOS 64-bit universal2 installer" from
+[python.org](https://www.python.org/downloads/macos/) (not 3.15, which this package does not support yet), then open a
+new Terminal window and run the block there.
+
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+python -m pip install -U pip
+pip install kitten-tts-cpp --extra-index-url https://download.pytorch.org/whl/cpu
+python -c "from kitten_tts_cpp import KittenTTS2Tiny; KittenTTS2Tiny('KittenML/kitten-tts-2-nano').generate_to_file('Guten Morgen.', 'hallo.wav', language='de')"
+```
+
+On Windows, run the block in a Command Prompt (in PowerShell, type `cmd` first), with `py -m venv .venv` and then
+`.venv\Scripts\activate.bat` in place of the first line. A new Windows installation also needs the Microsoft Visual
+C++ Redistributable, which PyTorch and espeak-ng use: `winget install Microsoft.VCRedist.2015+.x64` (without it the
+import fails with `WinError 126`). The package is tested on Linux (x86-64 and Arm64), Windows x64 and macOS
+(Apple M4 and M6); Windows on Arm has not been tested with these models yet. On a Mac, `KittenTTS2Tiny` uses the GPU
+(Metal) by default: on an Apple M6, 1.2 times (pico, nano) to 2.5 times (mini) faster than the CPU.
+
+[KittenML/kitten-tts-2-mini](https://huggingface.co/KittenML/kitten-tts-2-mini) speaks 16 languages,
+[-nano](https://huggingface.co/KittenML/kitten-tts-2-nano) and [-pico](https://huggingface.co/KittenML/kitten-tts-2-pico)
+8 each. The first use downloads the official weights and converts them to GGUF once (no Hugging Face account is
+needed; the warning about `HF_TOKEN` can be ignored). This one install covers every
+language, Japanese included (its first use downloads a 47 MB dictionary once). An NVIDIA GPU needs the GPU build of the package
+(`kitten-tts-cpp-cu12` on Linux, `kitten-tts-cpp-cu13` on Windows), which is not on PyPI yet: build it with the CUDA
+toolkit as in [Building](packaging/README.md#building) and install it as in
+[Installing an artifact](packaging/README.md#installing-an-artifact); `KittenTTS2Tiny` then runs on the GPU by default. Options, weights, speed and the C API:
+[tools/kitten-tts-tiny/README.md](tools/kitten-tts-tiny/README.md).
 
 For development, `python setup.py build_ext --inplace` builds the extension; set `PYTHONPATH=python` to import it directly. `python setup.py bdist_wheel` produces an installable wheel, and `python setup.py sdist` includes the native sources and normalizer submodule contents.
 

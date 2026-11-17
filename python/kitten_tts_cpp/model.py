@@ -4,6 +4,7 @@ import numbers
 import os
 from pathlib import Path
 import queue
+import re
 import sys
 import threading
 
@@ -60,6 +61,19 @@ def _finite(name, value):
         raise ValueError(f'{name} must be a finite number')
 
 
+_TINY_NAME = re.compile(r'(^|/)kitten-tts-2-(mini|nano|pico)/?$', re.IGNORECASE)
+
+
+def _is_tiny(model_name):
+    """True for a Kitten TTS 2 mini / nano / pico repository name or local directory (KittenTTS2Tiny runs those)."""
+    if Path(model_name).is_dir():
+        try:
+            return json.loads((Path(model_name) / 'config.json').read_text(encoding='utf-8')).get('type') == 'KITTEN2_TINY'
+        except (OSError, ValueError, AttributeError):
+            return False
+    return bool(_TINY_NAME.search(model_name))
+
+
 class KittenTTS2:
     """Persistent model. Uses the same native engine as the kitten-tts CLI.
 
@@ -92,6 +106,9 @@ class KittenTTS2:
                 '--data': str(data_dir or Path(__file__).parent / 'data'),
                 '--ca-file': str(ca_file or os.environ.get('SSL_CERT_FILE') or certifi.where())}
         model_name = os.fspath(model_name)
+        if _is_tiny(model_name):
+            raise ValueError(f'{model_name} is a Kitten TTS 2 mini / nano / pico model; load it with '
+                             f'kitten_tts_cpp.KittenTTS2Tiny({model_name!r}) instead')
         if Path(model_name).is_dir():
             if revision is not None:
                 raise ValueError('revision applies only to a Hugging Face repository')

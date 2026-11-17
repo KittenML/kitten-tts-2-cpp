@@ -17839,6 +17839,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     // So don't support this combination for now.
                     return false;
                 }
+                if (op->op == GGML_OP_MUL_MAT && op->op_params[0] == GGML_PREC_F32_STRICT && a->type == GGML_TYPE_F32 &&
+                    (device->fp16 || device->coopmat_support || device->coopmat2 ||
+                     !ggml_vk_dim01_contiguous(a) || !ggml_vk_dim01_contiguous(b))) {
+                    // strict f32 asks for f32 multiplies: not with fp16 or cooperative-matrix shaders, and not for an
+                    // input that is not contiguous, which ggml_vk_mul_mat_q_f16 first converts to fp16
+                    return false;
+                }
 
                 return true;
             }
